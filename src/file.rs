@@ -8,7 +8,7 @@ use ec4rs::{
         EndOfLine, FinalNewline, IndentSize, IndentStyle, MaxLineLen, TabWidth, TrimTrailingWs,
     },
 };
-use memchr::memrchr_iter;
+use memchr::memchr_iter;
 
 fn last_non_whitespace_or_tab_pos(line: &str) -> Option<usize> {
     line.bytes()
@@ -61,8 +61,8 @@ fn check_editorconfig_properties_for_line(
     let leading_whitespace_or_tabs_str = last_non_whitespace_or_tab_pos(cur_line)
         .map(|pos| &cur_line[0..pos + 1])
         .unwrap_or("");
-    let spaces = memrchr_iter(b' ', leading_whitespace_or_tabs_str.as_bytes()).count();
-    let tabs = memrchr_iter(b'\t', leading_whitespace_or_tabs_str.as_bytes()).count();
+    let spaces = memchr_iter(b' ', leading_whitespace_or_tabs_str.as_bytes()).count();
+    let tabs = memchr_iter(b'\t', leading_whitespace_or_tabs_str.as_bytes()).count();
 
     match indent_style {
         IndentStyle::Spaces => {
@@ -130,8 +130,8 @@ fn check_editorconfig_line_endings(contents: &str, properties: &Properties) -> C
     let desired_endings =
         memchr::memmem::find_iter(contents.as_bytes(), desired_le.as_bytes()).count();
 
-    let crs = memrchr_iter(b'\r', contents.as_bytes()).count();
-    let lfs = memrchr_iter(b'\n', contents.as_bytes()).count();
+    let crs = memchr_iter(b'\r', contents.as_bytes()).count();
+    let lfs = memchr_iter(b'\n', contents.as_bytes()).count();
 
     let line_endings_match = match line_ending_mode {
         EndOfLine::Cr => crs == desired_endings && lfs == 0,
