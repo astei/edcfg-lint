@@ -171,9 +171,219 @@ mod test {
     use super::*;
 
     #[test]
+    fn test_last_non_whitespace_or_tab_pos() {
+        assert_eq!(Some(4), last_non_whitespace_or_tab_pos("     potato"));
+        assert_eq!(Some(0), last_non_whitespace_or_tab_pos("\tpotato"));
+        assert_eq!(Some(2), last_non_whitespace_or_tab_pos("\t  potato"));
+        assert_eq!(None, last_non_whitespace_or_tab_pos("potato"));
+        assert_eq!(Some(0), last_non_whitespace_or_tab_pos(" "));
+        assert_eq!(Some(1), last_non_whitespace_or_tab_pos("  "));
+    }
+
+    #[test]
     fn test_line_space_width() {
         assert_eq!(5, line_space_width("     potato", 4));
         assert_eq!(4, line_space_width("\tpotato", 4));
         assert_eq!(6, line_space_width("\t  potato", 4));
+        assert_eq!(0, line_space_width("potato", 4));
+        assert_eq!(8, line_space_width("\t\tpotato", 4));
+        assert_eq!(10, line_space_width("          potato", 4));
+    }
+
+    #[test]
+    fn test_check_indent_size_valid() {
+        let mut properties = Properties::default();
+        properties.insert(IndentSize::Value(4));
+        properties.insert(TabWidth::Value(4));
+        properties.insert(IndentStyle::Spaces);
+
+        let errors = check_editorconfig_properties_for_line(1, "    code", &properties);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn test_check_indent_size_invalid() {
+        let mut properties = Properties::default();
+        properties.insert(IndentSize::Value(4));
+        properties.insert(TabWidth::Value(4));
+        properties.insert(IndentStyle::Spaces);
+
+        let errors = check_editorconfig_properties_for_line(1, "   code", &properties);
+        assert_eq!(errors.len(), 1);
+        match &errors[0] {
+            CheckError::InvalidIndentSize { line, actual_width, indent_size } => {
+                assert_eq!(*line, 1);
+                assert_eq!(*actual_width, 3);
+                assert_eq!(*indent_size, 4);
+            }
+            _ => panic!("Expected InvalidIndentSize error"),
+        }
+    }
+
+    #[test]
+    fn test_check_indent_style_spaces() {
+        let mut properties = Properties::default();
+        properties.insert(IndentSize::Value(4));
+        properties.insert(TabWidth::Value(4));
+        properties.insert(IndentStyle::Spaces);
+
+        let errors = check_editorconfig_properties_for_line(1, "    code", &properties);
+        assert!(errors.is_empty());
+
+        let errors = check_editorconfig_properties_for_line(1, "\tcode", &properties);
+        assert_eq!(errors.len(), 1);
+        match &errors[0] {
+            CheckError::WrongIndentStyle { expected, .. } => {
+                assert_eq!(*expected, IndentStyle::Spaces);
+            }
+            _ => panic!("Expected WrongIndentStyle error"),
+        }
+    }
+
+    #[test]
+    fn test_check_indent_style_tabs() {
+        let mut properties = Properties::default();
+        properties.insert(IndentSize::Value(4));
+        properties.insert(TabWidth::Value(4));
+        properties.insert(IndentStyle::Tabs);
+
+        let errors = check_editorconfig_properties_for_line(1, "\tcode", &properties);
+        assert!(errors.is_empty());
+
+        let errors = check_editorconfig_properties_for_line(1, "    code", &properties);
+        assert_eq!(errors.len(), 1);
+        match &errors[0] {
+            CheckError::WrongIndentStyle { expected, .. } => {
+                assert_eq!(*expected, IndentStyle::Tabs);
+            }
+            _ => panic!("Expected WrongIndentStyle error"),
+        }
+    }
+
+    #[test]
+    fn test_check_trailing_whitespace() {
+        let mut properties = Properties::default();
+        properties.insert(TrimTrailingWs::Value(true));
+        properties.insert(IndentStyle::Spaces);
+
+        let errors = check_editorconfig_properties_for_line(1, "code  ", &properties);
+        assert_eq!(errors.len(), 1);
+        match &errors[0] {
+            CheckError::TrailingWhitespace { line } => {
+                assert_eq!(*line, 1);
+            }
+            _ => panic!("Expected TrailingWhitespace error"),
+        }
+
+        let errors = check_editorconfig_properties_for_line(1, "code", &properties);
+        assert!(errors.iter().all(|e| !matches!(e, CheckError::TrailingWhitespace { .. })));
+    }
+
+    #[test]
+    fn test_check_max_line_length() {
+        let mut properties = Properties::default();
+        properties.insert(MaxLineLen::Value(10));
+        properties.insert(IndentStyle::Spaces);
+
+        let errors = check_editorconfig_properties_for_line(1, "short line", &properties);
+        assert!(errors.iter().all(|e| !matches!(e, CheckError::LineTooLong { .. })));
+
+        let errors = check_editorconfig_properties_for_line(1, "this is a very long line", &properties);
+        assert_eq!(errors.iter().filter(|e| matches!(e, CheckError::LineTooLong { .. })).count(), 1);
+        match errors.iter().find(|e| matches!(e, CheckError::LineTooLong { .. })) {
+            Some(CheckError::LineTooLong { line, actual_length, max_length }) => {
+                assert_eq!(*line, 1);
+                assert_eq!(*actual_length, 24);
+                assert_eq!(*max_length, 10);
+            }
+            _ => panic!("Expected LineTooLong error"),
+        }
+    }
+
+    #[test]
+    fn test_check_line_endings_lf() {
+        let mut properties = Properties::default();
+        properties.insert(EndOfLine::Lf);
+
+        let errors = check_editorconfig_line_endings("line1\nline2\n", &properties);
+        assert!(errors.is_empty());
+
+        let errors = check_editorconfig_line_endings("line1\r\nline2\r\n", &properties);
+        assert_eq!(errors.len(), 1);
+        match &errors[0] {
+            CheckError::WrongLineEnding { expected } => {
+                assert_eq!(expected, "\\u{a}");
+            }
+            _ => panic!("Expected WrongLineEnding error"),
+        }
+    }
+
+    #[test]
+    fn test_check_line_endings_crlf() {
+        let mut properties = Properties::default();
+        properties.insert(EndOfLine::CrLf);
+
+        let errors = check_editorconfig_line_endings("line1\r\nline2\r\n", &properties);
+        assert!(errors.is_empty());
+
+        let errors = check_editorconfig_line_endings("line1\nline2\n", &properties);
+        assert_eq!(errors.len(), 1);
+        match &errors[0] {
+            CheckError::WrongLineEnding { expected } => {
+                assert_eq!(expected, "\\u{d}\\u{a}");
+            }
+            _ => panic!("Expected WrongLineEnding error"),
+        }
+    }
+
+    #[test]
+    fn test_check_line_endings_cr() {
+        let mut properties = Properties::default();
+        properties.insert(EndOfLine::Cr);
+
+        let errors = check_editorconfig_line_endings("line1\rline2\r", &properties);
+        assert!(errors.is_empty());
+
+        let errors = check_editorconfig_line_endings("line1\nline2\n", &properties);
+        assert_eq!(errors.len(), 1);
+    }
+
+    #[test]
+    fn test_check_final_newline_present() {
+        let mut properties = Properties::default();
+        properties.insert(EndOfLine::Lf);
+        properties.insert(FinalNewline::Value(true));
+
+        let errors = check_editorconfig_line_endings("line1\nline2\n", &properties);
+        assert!(errors.iter().all(|e| !matches!(e, CheckError::MissingFinalNewline)));
+    }
+
+    #[test]
+    fn test_check_final_newline_missing() {
+        let mut properties = Properties::default();
+        properties.insert(EndOfLine::Lf);
+        properties.insert(FinalNewline::Value(true));
+
+        let errors = check_editorconfig_line_endings("line1\nline2", &properties);
+        assert_eq!(errors.iter().filter(|e| matches!(e, CheckError::MissingFinalNewline)).count(), 1);
+    }
+
+    #[test]
+    fn test_check_file_integration() {
+        let mut properties = Properties::default();
+        properties.insert(IndentSize::Value(2));
+        properties.insert(TabWidth::Value(4));
+        properties.insert(IndentStyle::Spaces);
+        properties.insert(TrimTrailingWs::Value(true));
+        properties.insert(EndOfLine::Lf);
+        properties.insert(FinalNewline::Value(true));
+
+        // Valid file
+        let errors = check_file_against_editorconfig("  line1\n  line2\n", &properties);
+        assert!(errors.is_empty());
+
+        // File with multiple errors
+        let errors = check_file_against_editorconfig("   line1  \n\tline2", &properties);
+        assert!(errors.len() > 1);
     }
 }
