@@ -99,8 +99,11 @@ fn check_editorconfig_properties_for_line(
     errors
 }
 
-fn check_editorconfig_line_endings(contents: &str, properties: &Properties) -> CheckResult {
+fn check_editorconfig_line_endings(contents: &str, properties: &Properties, empty_file_passes: bool) -> CheckResult {
     let mut errors: CheckResult = vec![];
+    if empty_file_passes && contents.len() == 0 {
+        return errors;
+    }
     let line_ending_mode = properties.get::<EndOfLine>().unwrap_or(EndOfLine::Lf);
     let desired_le = match line_ending_mode {
         EndOfLine::Cr => "\r",
@@ -140,7 +143,8 @@ fn check_editorconfig_line_endings(contents: &str, properties: &Properties) -> C
 
 pub fn check_file_against_editorconfig(contents: &str, properties: &Properties) -> CheckResult {
     let mut errors = vec![];
-    errors.extend_from_slice(&check_editorconfig_line_endings(contents, properties));
+    errors.extend_from_slice(&check_editorconfig_line_endings(contents, properties, true));
+
     for (i, line) in contents.lines().enumerate() {
         errors.extend_from_slice(&check_editorconfig_properties_for_line(i, line, properties));
     }
@@ -263,14 +267,32 @@ mod test {
     }
 
     #[test]
+    fn test_check_line_endings_empty() {
+        let mut properties = Properties::default();
+        properties.insert(EndOfLine::Lf);
+
+        let errors = check_editorconfig_line_endings("", &properties, true);
+        assert!(errors.is_empty());
+
+        let errors = check_editorconfig_line_endings("", &properties, false);
+        assert_eq!(errors.len(), 1);
+        match &errors[0] {
+            CheckError::WrongLineEnding { expected } => {
+                assert_eq!(expected, "\\u{a}");
+            }
+            _ => panic!("Expected WrongLineEnding error"),
+        }
+    }
+
+    #[test]
     fn test_check_line_endings_lf() {
         let mut properties = Properties::default();
         properties.insert(EndOfLine::Lf);
 
-        let errors = check_editorconfig_line_endings("line1\nline2\n", &properties);
+        let errors = check_editorconfig_line_endings("line1\nline2\n", &properties, true);
         assert!(errors.is_empty());
 
-        let errors = check_editorconfig_line_endings("line1\r\nline2\r\n", &properties);
+        let errors = check_editorconfig_line_endings("line1\r\nline2\r\n", &properties, true);
         assert_eq!(errors.len(), 1);
         match &errors[0] {
             CheckError::WrongLineEnding { expected } => {
@@ -285,10 +307,10 @@ mod test {
         let mut properties = Properties::default();
         properties.insert(EndOfLine::CrLf);
 
-        let errors = check_editorconfig_line_endings("line1\r\nline2\r\n", &properties);
+        let errors = check_editorconfig_line_endings("line1\r\nline2\r\n", &properties, true);
         assert!(errors.is_empty());
 
-        let errors = check_editorconfig_line_endings("line1\nline2\n", &properties);
+        let errors = check_editorconfig_line_endings("line1\nline2\n", &properties, true);
         assert_eq!(errors.len(), 1);
         match &errors[0] {
             CheckError::WrongLineEnding { expected } => {
@@ -303,10 +325,10 @@ mod test {
         let mut properties = Properties::default();
         properties.insert(EndOfLine::Cr);
 
-        let errors = check_editorconfig_line_endings("line1\rline2\r", &properties);
+        let errors = check_editorconfig_line_endings("line1\rline2\r", &properties, true);
         assert!(errors.is_empty());
 
-        let errors = check_editorconfig_line_endings("line1\nline2\n", &properties);
+        let errors = check_editorconfig_line_endings("line1\nline2\n", &properties, true);
         assert_eq!(errors.len(), 1);
     }
 
@@ -316,7 +338,7 @@ mod test {
         properties.insert(EndOfLine::Lf);
         properties.insert(FinalNewline::Value(true));
 
-        let errors = check_editorconfig_line_endings("line1\nline2\n", &properties);
+        let errors = check_editorconfig_line_endings("line1\nline2\n", &properties, true);
         assert!(errors.iter().all(|e| !matches!(e, CheckError::MissingFinalNewline)));
     }
 
@@ -326,7 +348,7 @@ mod test {
         properties.insert(EndOfLine::Lf);
         properties.insert(FinalNewline::Value(true));
 
-        let errors = check_editorconfig_line_endings("line1\nline2", &properties);
+        let errors = check_editorconfig_line_endings("line1\nline2", &properties, true);
         assert_eq!(errors.iter().filter(|e| matches!(e, CheckError::MissingFinalNewline)).count(), 1);
     }
 
