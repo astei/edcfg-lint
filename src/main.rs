@@ -1,3 +1,4 @@
+mod error;
 mod file;
 
 use ignore::WalkBuilder;
@@ -27,16 +28,41 @@ fn main() {
 
         let file_path = entry.path();
 
+        if let Ok(Some(mime_type)) = infer::get_from_path(file_path) {
+            let mime_type_accepted = [
+                "text/",
+                "application/octet-stream",
+                "application/ecmascript",
+                "application/json",
+                "application/x-ndjson",
+                "application/xml",
+                "+json",
+                "+xml",
+            ];
+            if !mime_type_accepted
+                .iter()
+                .any(|mt| mime_type.mime_type().contains(mt))
+            {
+                continue;
+            }
+        }
+
         // Skip the eddy binary itself and target directory
         if file_path.starts_with(path.join("target")) {
             continue;
         }
 
-        if let Err(e) = check_file(file_path) {
-            println!("✗ {}: {}", file_path.display(), e);
-            failed_files += 1;
-        } else {
-            println!("✓ {}", file_path.display());
+        match check_file(file_path) {
+            Err(errors) => {
+                println!("✗ {}", file_path.display());
+                for error in errors {
+                    println!("  {}", error);
+                }
+                failed_files += 1;
+            }
+            Ok(()) => {
+                println!("✓ {}", file_path.display());
+            }
         }
         total_files += 1;
     }
@@ -47,15 +73,16 @@ fn main() {
     }
 }
 
-fn check_file(path: &Path) -> Result<(), String> {
-    let properties =
-        ec4rs::properties_of(path).map_err(|e| format!("Failed to load editorconfig: {}", e))?;
+fn check_file(path: &Path) -> Result<(), Vec<error::CheckError>> {
+    let properties = ec4rs::properties_of(path).map_err(|_| vec![])?;
 
-    let content = fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
+    let content = fs::read_to_string(path).map_err(|_| vec![])?;
 
-    if !file::check_file_against_editorconfig(&content, &properties) {
-        return Err("failed editorconfig checks".to_string());
+    let errors = file::check_file_against_editorconfig(&content, &properties);
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
     }
-
-    Ok(())
 }

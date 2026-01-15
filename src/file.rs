@@ -1,3 +1,5 @@
+use crate::error::CheckError;
+
 use std::ops::Rem;
 
 use ec4rs::{
@@ -27,7 +29,12 @@ fn line_space_width(line: &str, properties: &Properties) -> usize {
         .sum()
 }
 
-fn check_editorconfig_properties_for_line(cur_line: &str, properties: &Properties) -> bool {
+fn check_editorconfig_properties_for_line(
+    cur_line_num: usize,
+    cur_line: &str,
+    properties: &Properties,
+) -> Vec<CheckError> {
+    let mut errors: Vec<CheckError> = vec![];
     let cur_line_width = line_space_width(cur_line, properties);
 
     let TabWidth::Value(tab_width) = properties.get::<TabWidth>().unwrap_or(TabWidth::Value(4));
@@ -43,11 +50,17 @@ fn check_editorconfig_properties_for_line(cur_line: &str, properties: &Propertie
 
     // check if line width matches indent size
     if cur_line_width.rem(indent_size) != 0 {
-        return false;
+        errors.push(CheckError::InvalidIndentSize {
+            line: cur_line_num,
+            actual_width: cur_line_width,
+            indent_size,
+        });
     }
 
     // check indentation style
-    let indent_style = properties.get::<IndentStyle>().unwrap_or(IndentStyle::Tabs);
+    let indent_style = properties
+        .get::<IndentStyle>()
+        .unwrap_or(IndentStyle::Spaces);
     let leading_whitespace_or_tabs_str = last_non_whitespace_or_tab_pos(cur_line)
         .map(|pos| &cur_line[0..pos + 1])
         .unwrap_or("");
@@ -55,22 +68,37 @@ fn check_editorconfig_properties_for_line(cur_line: &str, properties: &Propertie
         .bytes()
         .filter(|&b| b == b' ')
         .count();
+    let tabs = leading_whitespace_or_tabs_str
+        .bytes()
+        .filter(|&b| b == b'\t')
+        .count();
+
     match indent_style {
         IndentStyle::Spaces => {
             if spaces != cur_line_width {
-                return false;
+                errors.push(CheckError::WrongIndentStyle {
+                    line: cur_line_num,
+                    expected: indent_style,
+                    expected_tabs: 0,
+                    expected_spaces: cur_line_width,
+                    actual_spaces: spaces,
+                    actual_tabs: tabs,
+                });
             }
         }
         IndentStyle::Tabs => {
-            let tabs = leading_whitespace_or_tabs_str
-                .bytes()
-                .filter(|&b| b == b'\t')
-                .count();
             let desired_tabs = cur_line_width.div_euclid(tab_width);
             let desired_spaces = cur_line_width.rem_euclid(tab_width);
 
             if desired_tabs != tabs || spaces != desired_spaces {
-                return false;
+                errors.push(CheckError::WrongIndentStyle {
+                    line: cur_line_num,
+                    expected: indent_style,
+                    expected_tabs: desired_tabs,
+                    expected_spaces: desired_spaces,
+                    actual_spaces: spaces,
+                    actual_tabs: tabs,
+                });
             }
         }
     }
@@ -79,30 +107,37 @@ fn check_editorconfig_properties_for_line(cur_line: &str, properties: &Propertie
         .get::<TrimTrailingWs>()
         .unwrap_or(TrimTrailingWs::Value(true));
     if trim_trailing_ws && cur_line.trim_end().len() != cur_line.len() {
-        return false;
+        errors.push(CheckError::TrailingWhitespace { line: cur_line_num });
     }
 
     if let MaxLineLen::Value(max_line_len) =
         properties.get::<MaxLineLen>().unwrap_or(MaxLineLen::Off)
     {
         // todo: handle charsets
-        if cur_line.chars().count() > max_line_len {
-            return false;
+        let line_len = cur_line.chars().count();
+        if line_len > max_line_len {
+            errors.push(CheckError::LineTooLong {
+                line: cur_line_num,
+                actual_length: line_len,
+                max_length: max_line_len,
+            });
         }
     }
 
-    true
+    errors
 }
 
-fn check_editorconfig_line_endings(contents: &str, properties: &Properties) -> bool {
-    let line_ending_mode = properties.get::<EndOfLine>().unwrap_or(EndOfLine::CrLf);
+fn check_editorconfig_line_endings(contents: &str, properties: &Properties) -> Vec<CheckError> {
+    let mut errors: Vec<CheckError> = vec![];
+    let line_ending_mode = properties.get::<EndOfLine>().unwrap_or(EndOfLine::Lf);
     let desired_le = match line_ending_mode {
         EndOfLine::Cr => "\r",
         EndOfLine::Lf => "\n",
         EndOfLine::CrLf => "\r\n",
     };
 
-    let desired_endings = memchr::memmem::find_iter(desired_le.as_bytes(), contents).count();
+    let desired_endings =
+        memchr::memmem::find_iter(contents.as_bytes(), desired_le.as_bytes()).count();
 
     let crs = memrchr_iter(b'\r', contents.as_bytes()).count();
     let lfs = memrchr_iter(b'\n', contents.as_bytes()).count();
@@ -114,24 +149,31 @@ fn check_editorconfig_line_endings(contents: &str, properties: &Properties) -> b
     };
 
     if !line_endings_match {
-        return false;
+        errors.push(CheckError::WrongLineEnding {
+            expected: format!(
+                "found: {} crs, {} lfs, wanted {}",
+                crs, lfs, desired_endings
+            ),
+        });
     }
 
     if let Some(FinalNewline::Value(final_newline)) = properties.get::<FinalNewline>().ok()
         && final_newline
-        && &contents[contents.len() - 2..] != desired_le {
-            return false;
+    {
+        let desired_le_len = desired_le.len();
+        if contents.len() < desired_le_len || !contents.ends_with(desired_le) {
+            errors.push(CheckError::MissingFinalNewline);
         }
-
-    true
-}
-
-pub fn check_file_against_editorconfig(contents: &str, properties: &Properties) -> bool {
-    if check_editorconfig_line_endings(contents, properties) {
-        return false;
     }
 
-    contents
-        .lines()
-        .all(|l| check_editorconfig_properties_for_line(l, properties))
+    errors
+}
+
+pub fn check_file_against_editorconfig(contents: &str, properties: &Properties) -> Vec<CheckError> {
+    let mut errors = vec![];
+    errors.extend_from_slice(&check_editorconfig_line_endings(contents, properties));
+    for (i, line) in contents.lines().enumerate() {
+        errors.extend_from_slice(&check_editorconfig_properties_for_line(i, line, properties));
+    }
+    errors
 }
