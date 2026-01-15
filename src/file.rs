@@ -18,9 +18,7 @@ fn last_non_whitespace_or_tab_pos(line: &str) -> Option<usize> {
         .map(|(pos, _)| pos)
 }
 
-fn line_space_width(line: &str, properties: &Properties) -> usize {
-    let TabWidth::Value(tab_width) = properties.get::<TabWidth>().unwrap_or(TabWidth::Value(4));
-
+fn line_space_width(line: &str, tab_width: usize) -> usize {
     // skip over consecutive runs of `tabs_or_spaces` positions, on the theory the first non-whitespace/tab character will
     // occur after a run of positions
     line.bytes()
@@ -34,10 +32,11 @@ fn check_editorconfig_properties_for_line(
     cur_line: &str,
     properties: &Properties,
 ) -> Vec<CheckError> {
-    let mut errors: Vec<CheckError> = vec![];
-    let cur_line_width = line_space_width(cur_line, properties);
-
     let TabWidth::Value(tab_width) = properties.get::<TabWidth>().unwrap_or(TabWidth::Value(4));
+
+    let mut errors: Vec<CheckError> = vec![];
+    let cur_line_width = line_space_width(cur_line, tab_width);
+
     let indent_size_raw = properties
         .get::<IndentSize>()
         .unwrap_or(IndentSize::Value(4));
@@ -45,8 +44,6 @@ fn check_editorconfig_properties_for_line(
         IndentSize::Value(spec_indent_size) => spec_indent_size,
         IndentSize::UseTabWidth => tab_width,
     };
-
-    // todo: add error reporting
 
     // check if line width matches indent size
     if cur_line_width.rem(indent_size) != 0 {
@@ -64,14 +61,8 @@ fn check_editorconfig_properties_for_line(
     let leading_whitespace_or_tabs_str = last_non_whitespace_or_tab_pos(cur_line)
         .map(|pos| &cur_line[0..pos + 1])
         .unwrap_or("");
-    let spaces = leading_whitespace_or_tabs_str
-        .bytes()
-        .filter(|&b| b == b' ')
-        .count();
-    let tabs = leading_whitespace_or_tabs_str
-        .bytes()
-        .filter(|&b| b == b'\t')
-        .count();
+    let spaces = memrchr_iter(b' ', leading_whitespace_or_tabs_str.as_bytes()).count();
+    let tabs = memrchr_iter(b'\t', leading_whitespace_or_tabs_str.as_bytes()).count();
 
     match indent_style {
         IndentStyle::Spaces => {
@@ -150,10 +141,7 @@ fn check_editorconfig_line_endings(contents: &str, properties: &Properties) -> V
 
     if !line_endings_match {
         errors.push(CheckError::WrongLineEnding {
-            expected: format!(
-                "found: {} crs, {} lfs, wanted {}",
-                crs, lfs, desired_endings
-            ),
+            expected: desired_le.escape_unicode().to_string()
         });
     }
 
@@ -176,4 +164,16 @@ pub fn check_file_against_editorconfig(contents: &str, properties: &Properties) 
         errors.extend_from_slice(&check_editorconfig_properties_for_line(i, line, properties));
     }
     errors
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_line_space_width() {
+        assert_eq!(5, line_space_width("     potato", 4));
+        assert_eq!(4, line_space_width("\tpotato", 4));
+        assert_eq!(6, line_space_width("\t  potato", 4));
+    }
 }

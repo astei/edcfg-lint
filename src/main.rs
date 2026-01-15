@@ -1,74 +1,87 @@
 mod error;
 mod file;
 
-use ignore::WalkBuilder;
+use ignore::{WalkBuilder, WalkState};
 use std::fs;
 use std::path::Path;
+use std::sync::mpsc::channel;
 
 fn main() {
     // Start from current directory
     let path = std::env::current_dir().expect("Failed to get current directory");
 
     let mut total_files = 0;
-    let mut failed_files = 0;
 
     // Walk files, respecting .gitignore
-    for result in WalkBuilder::new(&path).build() {
-        let entry = match result {
-            Ok(entry) => entry,
-            Err(e) => {
-                eprintln!("Error walking directory: {}", e);
-                continue;
-            }
-        };
+    let (sender, receiver) = channel();
 
-        if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
-            continue;
-        }
-
-        let file_path = entry.path();
-
-        if let Ok(Some(mime_type)) = infer::get_from_path(file_path) {
-            let mime_type_accepted = [
-                "text/",
-                "application/octet-stream",
-                "application/ecmascript",
-                "application/json",
-                "application/x-ndjson",
-                "application/xml",
-                "+json",
-                "+xml",
-            ];
-            if !mime_type_accepted
-                .iter()
-                .any(|mt| mime_type.mime_type().contains(mt))
-            {
-                continue;
-            }
-        }
-
-        // Skip the eddy binary itself and target directory
-        if file_path.starts_with(path.join("target")) {
-            continue;
-        }
-
-        match check_file(file_path) {
-            Err(errors) => {
-                println!("✗ {}", file_path.display());
-                for error in errors {
-                    println!("  {}", error);
+    WalkBuilder::new(&path).build_parallel().run(|| {
+        let my_sender = sender.clone();
+        Box::new(move |result| {
+            let entry = match result {
+                Ok(entry) => entry,
+                Err(e) => {
+                    eprintln!("Error walking directory: {}", e);
+                    return WalkState::Continue;
                 }
-                failed_files += 1;
+            };
+
+            if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+                return WalkState::Continue;
             }
-            Ok(()) => {
-                println!("✓ {}", file_path.display());
+
+            let file_path = entry.path().to_path_buf();
+
+            if let Ok(Some(mime_type)) = infer::get_from_path(&file_path) {
+                let mime_type_accepted = [
+                    "text/",
+                    "application/octet-stream",
+                    "application/ecmascript",
+                    "application/json",
+                    "application/x-ndjson",
+                    "application/xml",
+                    "+json",
+                    "+xml",
+                ];
+                if !mime_type_accepted
+                    .iter()
+                    .any(|mt| mime_type.mime_type().contains(mt))
+                {
+                    return WalkState::Continue;
+                }
             }
+
+            let result = check_file(&file_path);
+            let _ = my_sender.send((file_path, result));
+            WalkState::Continue
+        })
+    });
+
+    drop(sender);
+
+    let mut files_with_errors = vec![];
+
+    for (file_path, result) in receiver {
+        if let Err(errors) = result {
+            files_with_errors.push((file_path, errors));
         }
         total_files += 1;
     }
 
-    println!("\nChecked {} files, {} failed", total_files, failed_files);
-    if failed_files > 0 {
+    files_with_errors.sort_by_key(|(file_path, _entries)| file_path.to_owned());
+    for (file_path, errors) in files_with_errors.iter() {
+        println!("✗ {}", file_path.display());
+        for error in errors {
+            println!("  {}", error);
+        }
+    }
+
+    println!(
+        "\nChecked {} files, {} failed",
+        total_files,
+        files_with_errors.len()
+    );
+    if !files_with_errors.is_empty() {
         std::process::exit(1);
     }
 }
