@@ -2,11 +2,6 @@ use ec4rs::property::IndentStyle;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CheckError {
-    InvalidIndentSize {
-        line: usize,
-        actual_width: usize,
-        indent_size: usize,
-    },
     WrongIndentStyle {
         line: usize,
         expected: IndentStyle,
@@ -32,15 +27,6 @@ pub enum CheckError {
 impl std::fmt::Display for CheckError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CheckError::InvalidIndentSize {
-                line,
-                actual_width,
-                indent_size,
-            } => write!(
-                f,
-                "line {}: invalid indent size (width {} is not a multiple of {})",
-                line, actual_width, indent_size
-            ),
             CheckError::WrongIndentStyle {
                 line,
                 expected,

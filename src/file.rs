@@ -1,7 +1,5 @@
 use crate::error::{CheckError, CheckResult};
 
-use std::ops::Rem;
-
 use ec4rs::{
     Properties,
     property::{
@@ -36,23 +34,6 @@ fn check_editorconfig_properties_for_line(
 
     let mut errors: CheckResult = vec![];
     let cur_line_width = line_space_width(cur_line, tab_width);
-
-    let indent_size_raw = properties
-        .get::<IndentSize>()
-        .unwrap_or(IndentSize::Value(4));
-    let indent_size = match indent_size_raw {
-        IndentSize::Value(spec_indent_size) => spec_indent_size,
-        IndentSize::UseTabWidth => tab_width,
-    };
-
-    // check if line width matches indent size
-    if cur_line_width.rem(indent_size) != 0 {
-        errors.push(CheckError::InvalidIndentSize {
-            line: cur_line_num,
-            actual_width: cur_line_width,
-            indent_size,
-        });
-    }
 
     // check indentation style
     let indent_style = properties
@@ -199,25 +180,6 @@ mod test {
 
         let errors = check_editorconfig_properties_for_line(1, "    code", &properties);
         assert!(errors.is_empty());
-    }
-
-    #[test]
-    fn test_check_indent_size_invalid() {
-        let mut properties = Properties::default();
-        properties.insert(IndentSize::Value(4));
-        properties.insert(TabWidth::Value(4));
-        properties.insert(IndentStyle::Spaces);
-
-        let errors = check_editorconfig_properties_for_line(1, "   code", &properties);
-        assert_eq!(errors.len(), 1);
-        match &errors[0] {
-            CheckError::InvalidIndentSize { line, actual_width, indent_size } => {
-                assert_eq!(*line, 1);
-                assert_eq!(*actual_width, 3);
-                assert_eq!(*indent_size, 4);
-            }
-            _ => panic!("Expected InvalidIndentSize error"),
-        }
     }
 
     #[test]
