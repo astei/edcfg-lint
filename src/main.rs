@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
 use std::sync::OnceLock;
 
-use clap::Parser;
+use clap::error::ErrorKind;
+use clap::{CommandFactory, Parser};
 
 static DEFAULT_EXCLUDES: OnceLock<RegexSet> = OnceLock::new();
 
@@ -66,6 +67,8 @@ fn get_default_excludes() -> &'static RegexSet {
             r"\.gif$",
             r"\.ico$",
             r"\.jpe?g$",
+            r"\.pcm$",
+            r"\.mp3$",
             r"\.mp4$",
             r"\.p[bgnp]m$",
             r"\.png$",
@@ -110,6 +113,10 @@ struct Args {
     #[arg(short, long)]
     concise: bool,
 
+    /// Files to exclude.
+    #[arg(long)]
+    exclude: Vec<String>,
+
     /// Path to a directory with files to check, or specific files to check.
     paths: Vec<PathBuf>,
 }
@@ -126,6 +133,18 @@ fn main() {
     let (sender, receiver) = channel();
     let excludes = get_default_excludes();
 
+    let user_provided_excludes = match RegexSet::new(args.exclude) {
+        Ok(user_provided_excludes) => user_provided_excludes,
+        Err(err) => {
+            let mut cmd = Args::command();
+            cmd.error(
+                ErrorKind::InvalidValue,
+                format!("exclude pattern syntax is invalid: {}", err),
+            )
+            .exit();
+        }
+    };
+
     let mut walk_builder = WalkBuilder::new(&first_path);
     for path in args.paths.iter().skip(1) {
         walk_builder.add(path);
@@ -134,7 +153,7 @@ fn main() {
     walk_builder
         .filter_entry(move |entry| {
             let path_str = entry.path().to_string_lossy();
-            !excludes.is_match(&path_str)
+            !excludes.is_match(&path_str) && !user_provided_excludes.is_match(&path_str)
         })
         .build_parallel()
         .run(|| {

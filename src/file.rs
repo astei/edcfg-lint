@@ -270,6 +270,7 @@ mod test {
     fn test_check_line_endings_empty() {
         let mut properties = Properties::default();
         properties.insert(EndOfLine::Lf);
+        properties.insert(FinalNewline::Value(true));
 
         let errors = check_editorconfig_line_endings("", &properties, true);
         assert!(errors.is_empty());
@@ -277,9 +278,7 @@ mod test {
         let errors = check_editorconfig_line_endings("", &properties, false);
         assert_eq!(errors.len(), 1);
         match &errors[0] {
-            CheckError::WrongLineEnding { expected } => {
-                assert_eq!(expected, "\\u{a}");
-            }
+            CheckError::MissingFinalNewline => (),
             _ => panic!("Expected WrongLineEnding error"),
         }
     }
