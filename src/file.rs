@@ -1,4 +1,4 @@
-use crate::error::CheckError;
+use crate::error::{CheckError, CheckResult};
 
 use std::ops::Rem;
 
@@ -31,10 +31,10 @@ fn check_editorconfig_properties_for_line(
     cur_line_num: usize,
     cur_line: &str,
     properties: &Properties,
-) -> Vec<CheckError> {
+) -> CheckResult {
     let TabWidth::Value(tab_width) = properties.get::<TabWidth>().unwrap_or(TabWidth::Value(4));
 
-    let mut errors: Vec<CheckError> = vec![];
+    let mut errors: CheckResult = vec![];
     let cur_line_width = line_space_width(cur_line, tab_width);
 
     let indent_size_raw = properties
@@ -118,8 +118,8 @@ fn check_editorconfig_properties_for_line(
     errors
 }
 
-fn check_editorconfig_line_endings(contents: &str, properties: &Properties) -> Vec<CheckError> {
-    let mut errors: Vec<CheckError> = vec![];
+fn check_editorconfig_line_endings(contents: &str, properties: &Properties) -> CheckResult {
+    let mut errors: CheckResult = vec![];
     let line_ending_mode = properties.get::<EndOfLine>().unwrap_or(EndOfLine::Lf);
     let desired_le = match line_ending_mode {
         EndOfLine::Cr => "\r",
@@ -157,7 +157,7 @@ fn check_editorconfig_line_endings(contents: &str, properties: &Properties) -> V
     errors
 }
 
-pub fn check_file_against_editorconfig(contents: &str, properties: &Properties) -> Vec<CheckError> {
+pub fn check_file_against_editorconfig(contents: &str, properties: &Properties) -> CheckResult {
     let mut errors = vec![];
     errors.extend_from_slice(&check_editorconfig_line_endings(contents, properties));
     for (i, line) in contents.lines().enumerate() {

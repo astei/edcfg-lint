@@ -4,9 +4,11 @@ mod file;
 use ignore::{WalkBuilder, WalkState};
 use regex::RegexSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
 use std::sync::OnceLock;
+
+use clap::Parser;
 
 static DEFAULT_EXCLUDES: OnceLock<RegexSet> = OnceLock::new();
 
@@ -101,9 +103,22 @@ fn get_default_excludes() -> &'static RegexSet {
     })
 }
 
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Don't emit specific errors.
+    #[arg(short, long)]
+    concise: bool,
+
+    /// Path to a directory with files to check, or specific files to check.
+    paths: Vec<PathBuf>,
+}
+
 fn main() {
+    let args = Args::parse();
+
     // Start from current directory
-    let path = std::env::current_dir().expect("Failed to get current directory");
+    let first_path = if args.paths.len() > 0 { args.paths[0].clone() } else { std::env::current_dir().expect("Failed to get current directory") };
 
     let mut total_files = 0;
 
@@ -111,7 +126,12 @@ fn main() {
     let (sender, receiver) = channel();
     let excludes = get_default_excludes();
 
-    WalkBuilder::new(&path)
+    let mut walk_builder = WalkBuilder::new(&first_path);
+    for path in args.paths.iter().skip(1) {
+        walk_builder.add(path);
+    }
+
+    walk_builder
         .filter_entry(move |entry| {
             let path_str = entry.path().to_string_lossy();
             !excludes.is_match(&path_str)
@@ -170,11 +190,13 @@ fn main() {
         total_files += 1;
     }
 
-    files_with_errors.sort_by_key(|(file_path, _entries)| file_path.to_owned());
-    for (file_path, errors) in files_with_errors.iter() {
-        println!("✗ {}", file_path.display());
-        for error in errors {
-            println!("  {}", error);
+    if !args.concise {
+        files_with_errors.sort_by_key(|(file_path, _entries)| file_path.to_owned());
+        for (file_path, errors) in files_with_errors.iter() {
+            println!("✗ {}", file_path.display());
+            for error in errors {
+                println!("  {}", error);
+            }
         }
     }
 
