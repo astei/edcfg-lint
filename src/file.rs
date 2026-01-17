@@ -187,7 +187,7 @@ pub fn check_file_against_editorconfig(contents: &[u8], properties: &Properties)
     errors.extend_from_slice(&check_editorconfig_line_endings(&decoded_string, properties, true));
 
     for (i, line) in decoded_string.lines().enumerate() {
-        errors.extend_from_slice(&check_editorconfig_properties_for_line(i, line, properties));
+        errors.extend_from_slice(&check_editorconfig_properties_for_line(i + 1, line, properties));
     }
     errors
 }
