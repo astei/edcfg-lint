@@ -1,4 +1,4 @@
-use ec4rs::property::IndentStyle;
+use ec4rs::property::{Charset, IndentStyle};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CheckError {
@@ -22,6 +22,13 @@ pub enum CheckError {
         expected: String,
     },
     MissingFinalNewline,
+    WrongFileEncoding {
+        expected: Charset,
+        actual: Charset
+    },
+    IncorrectFileEncoding {
+        charset: Charset,
+    }
 }
 
 impl std::fmt::Display for CheckError {
@@ -56,6 +63,12 @@ impl std::fmt::Display for CheckError {
             }
             CheckError::MissingFinalNewline => {
                 write!(f, "missing final newline")
+            },
+            CheckError::WrongFileEncoding { expected, actual } => {
+                write!(f, "file expected to be encoded as {}, but sniffed {}", expected, actual)
+            },
+            CheckError::IncorrectFileEncoding { charset } => {
+                write!(f, "unable to decode file as {}, replacements were applied", charset)
             }
         }
     }

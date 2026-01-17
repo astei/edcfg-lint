@@ -232,7 +232,7 @@ fn main() {
 fn check_file(path: &Path) -> Result<(), Vec<error::CheckError>> {
     let properties = ec4rs::properties_of(path).map_err(|_| vec![])?;
 
-    let content = fs::read_to_string(path).map_err(|_| vec![])?;
+    let content = fs::read(path).map_err(|_| vec![])?;
 
     let errors = file::check_file_against_editorconfig(&content, &properties);
 

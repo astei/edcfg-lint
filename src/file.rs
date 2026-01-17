@@ -3,7 +3,7 @@ use crate::error::{CheckError, CheckResult};
 use ec4rs::{
     Properties,
     property::{
-        EndOfLine, FinalNewline, IndentSize, IndentStyle, MaxLineLen, TabWidth, TrimTrailingWs,
+        Charset, EndOfLine, FinalNewline, IndentSize, IndentStyle, MaxLineLen, TabWidth, TrimTrailingWs
     },
 };
 use memchr::memchr_iter;
@@ -141,11 +141,52 @@ fn check_editorconfig_line_endings(contents: &str, properties: &Properties, empt
     errors
 }
 
-pub fn check_file_against_editorconfig(contents: &str, properties: &Properties) -> CheckResult {
+pub fn check_file_against_editorconfig(contents: &[u8], properties: &Properties) -> CheckResult {
     let mut errors = vec![];
-    errors.extend_from_slice(&check_editorconfig_line_endings(contents, properties, true));
 
-    for (i, line) in contents.lines().enumerate() {
+    // Validate that the file is indeed encoded as expected.
+    let charset = properties.get::<Charset>().unwrap_or(Charset::Utf8);
+    let specified_encoding = match charset {
+        Charset::Utf8 => encoding_rs::UTF_8,
+        Charset::Utf8Bom => encoding_rs::UTF_8,
+        Charset::Latin1 => encoding_rs::WINDOWS_1252,
+        Charset::Utf16Le => encoding_rs::UTF_16LE,
+        Charset::Utf16Be => encoding_rs::UTF_16BE
+    };
+
+    // Check for the presence of a BOM
+    let bom_present = encoding_rs::Encoding::for_bom(&contents) != None;
+
+    let (decoded_string, sniffed_encoding, replacements) = specified_encoding.decode(&contents);
+    if sniffed_encoding != specified_encoding {
+        let reverse_encoding = if sniffed_encoding == encoding_rs::UTF_8 {
+            Charset::Utf8
+        } else if sniffed_encoding == encoding_rs::UTF_16LE {
+            Charset::Utf16Le
+        } else if sniffed_encoding == encoding_rs::UTF_16BE {
+            Charset::Utf16Be
+        } else if sniffed_encoding == encoding_rs::WINDOWS_1252 {
+            Charset::Latin1
+        } else {
+            unreachable!()
+        };
+        errors.push(CheckError::WrongFileEncoding { expected: charset, actual: reverse_encoding });
+    }
+    // Special case: we *can* decode the string as UTF-8, but a BOM was present
+    if sniffed_encoding == encoding_rs::UTF_8 {
+        if !bom_present && charset == Charset::Utf8Bom {
+            errors.push(CheckError::WrongFileEncoding { expected: Charset::Utf8Bom, actual: Charset::Utf8 });
+        } else if bom_present && charset == Charset::Utf8 {
+            errors.push(CheckError::WrongFileEncoding { expected: Charset::Utf8, actual: Charset::Utf8Bom });
+        }
+    }
+    if replacements {
+        errors.push(CheckError::IncorrectFileEncoding { charset });
+    }
+
+    errors.extend_from_slice(&check_editorconfig_line_endings(&decoded_string, properties, true));
+
+    for (i, line) in decoded_string.lines().enumerate() {
         errors.extend_from_slice(&check_editorconfig_properties_for_line(i, line, properties));
     }
     errors
@@ -362,11 +403,136 @@ mod test {
         properties.insert(FinalNewline::Value(true));
 
         // Valid file
-        let errors = check_file_against_editorconfig("  line1\n  line2\n", &properties);
+        let errors = check_file_against_editorconfig(b"  line1\n  line2\n", &properties);
         assert!(errors.is_empty());
 
         // File with multiple errors
-        let errors = check_file_against_editorconfig("   line1  \n\tline2", &properties);
+        let errors = check_file_against_editorconfig(b"   line1  \n\tline2", &properties);
         assert!(errors.len() > 1);
+    }
+
+    #[test]
+    fn test_charset_utf8_no_bom() {
+        let mut properties = Properties::default();
+        properties.insert(Charset::Utf8);
+
+        let errors = check_file_against_editorconfig(b"Hello UTF-8\n", &properties);
+        assert!(errors.is_empty(), "UTF-8 without BOM should pass for charset=utf-8");
+    }
+
+    #[test]
+    fn test_charset_utf8_with_bom_correct() {
+        let mut properties = Properties::default();
+        properties.insert(Charset::Utf8Bom);
+
+        let content = b"\xEF\xBB\xBFHello UTF-8 with BOM\n";
+        let errors = check_file_against_editorconfig(content, &properties);
+        assert!(errors.is_empty(), "UTF-8 with BOM should pass for charset=utf-8-bom");
+    }
+
+    #[test]
+    fn test_charset_utf8_unexpected_bom() {
+        let mut properties = Properties::default();
+        properties.insert(Charset::Utf8);
+
+        let content = b"\xEF\xBB\xBFHello UTF-8 with BOM\n";
+        let errors = check_file_against_editorconfig(content, &properties);
+        assert_eq!(errors.len(), 1, "UTF-8 with BOM should fail for charset=utf-8");
+        match &errors[0] {
+            CheckError::WrongFileEncoding { expected, actual } => {
+                assert_eq!(*expected, Charset::Utf8);
+                assert_eq!(*actual, Charset::Utf8Bom);
+            }
+            _ => panic!("Expected WrongFileEncoding error"),
+        }
+    }
+
+    #[test]
+    fn test_charset_utf8_missing_bom() {
+        let mut properties = Properties::default();
+        properties.insert(Charset::Utf8Bom);
+
+        let content = b"Hello UTF-8 without BOM\n";
+        let errors = check_file_against_editorconfig(content, &properties);
+        assert_eq!(errors.len(), 1, "UTF-8 without BOM should fail for charset=utf-8-bom");
+        match &errors[0] {
+            CheckError::WrongFileEncoding { expected, actual } => {
+                assert_eq!(*expected, Charset::Utf8Bom);
+                assert_eq!(*actual, Charset::Utf8);
+            }
+            _ => panic!("Expected WrongFileEncoding error"),
+        }
+    }
+
+    #[test]
+    fn test_charset_utf16le_correct() {
+        let mut properties = Properties::default();
+        properties.insert(Charset::Utf16Le);
+
+        // UTF-16LE BOM (FF FE) + "Hi\n" in UTF-16LE
+        let content = b"\xFF\xFEH\x00i\x00\n\x00";
+        let errors = check_file_against_editorconfig(content, &properties);
+        assert!(errors.is_empty(), "UTF-16LE with BOM should pass for charset=utf-16le");
+    }
+
+    #[test]
+    fn test_charset_utf16le_claimed_as_utf8() {
+        let mut properties = Properties::default();
+        properties.insert(Charset::Utf8);
+
+        // UTF-16LE BOM (FF FE) + "Hi\n" in UTF-16LE
+        let content = b"\xFF\xFEH\x00i\x00\n\x00";
+        let errors = check_file_against_editorconfig(content, &properties);
+        assert_eq!(errors.len(), 1, "UTF-16LE should fail when claimed as UTF-8");
+        match &errors[0] {
+            CheckError::WrongFileEncoding { expected, actual } => {
+                assert_eq!(*expected, Charset::Utf8);
+                assert_eq!(*actual, Charset::Utf16Le);
+            }
+            _ => panic!("Expected WrongFileEncoding error"),
+        }
+    }
+
+    #[test]
+    fn test_charset_utf16be_correct() {
+        let mut properties = Properties::default();
+        properties.insert(Charset::Utf16Be);
+
+        // UTF-16BE BOM (FE FF) + "Hi\n" in UTF-16BE
+        let content = b"\xFE\xFF\x00H\x00i\x00\n";
+        let errors = check_file_against_editorconfig(content, &properties);
+        assert!(errors.is_empty(), "UTF-16BE with BOM should pass for charset=utf-16be");
+    }
+
+    #[test]
+    fn test_charset_latin1_correct() {
+        let mut properties = Properties::default();
+        properties.insert(Charset::Latin1);
+
+        // Latin1: "Café\n" with é as 0xE9
+        let content = b"Caf\xE9\n";
+        let errors = check_file_against_editorconfig(content, &properties);
+        assert!(errors.is_empty(), "Latin1 content should pass for charset=latin1");
+    }
+
+    #[test]
+    fn test_charset_malformed_utf8() {
+        let mut properties = Properties::default();
+        properties.insert(Charset::Utf8);
+
+        // Invalid UTF-8 sequence
+        let content = b"Hello\xFF\xFEWorld\n";
+        let errors = check_file_against_editorconfig(content, &properties);
+
+        // Should detect either wrong encoding (sniffed as UTF-16LE due to FF FE)
+        // or incorrect encoding (replacements needed)
+        assert!(!errors.is_empty(), "Malformed UTF-8 should produce errors");
+        assert!(
+            errors.iter().any(|e| matches!(e,
+                CheckError::WrongFileEncoding { .. } |
+                CheckError::IncorrectFileEncoding { .. }
+            )),
+            "Should detect encoding issue"
+        );
     }
 }
