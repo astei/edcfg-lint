@@ -8,12 +8,8 @@ use ec4rs::{
 };
 use memchr::memchr_iter;
 
-fn last_non_whitespace_or_tab_pos(line: &str) -> Option<usize> {
-    line.bytes()
-        .enumerate()
-        .take_while(|(_, b)| *b == b' ' || *b == b'\t')
-        .last()
-        .map(|(pos, _)| pos)
+fn first_non_whitespace_or_tab_pos(line: &str) -> Option<usize> {
+    line.bytes().position(|b| b != b' ' && b != b'\t')
 }
 
 fn line_space_width(line: &str, tab_width: usize) -> usize {
@@ -39,40 +35,29 @@ fn check_editorconfig_properties_for_line(
     let indent_style = properties
         .get::<IndentStyle>()
         .unwrap_or(IndentStyle::Spaces);
-    let leading_whitespace_or_tabs_str = last_non_whitespace_or_tab_pos(cur_line)
-        .map(|pos| &cur_line[0..pos + 1])
-        .unwrap_or("");
+    let leading_whitespace_or_tabs_str = first_non_whitespace_or_tab_pos(cur_line)
+        .map(|pos| &cur_line[0..pos])
+        .unwrap_or(cur_line);
     let spaces = memchr_iter(b' ', leading_whitespace_or_tabs_str.as_bytes()).count();
     let tabs = memchr_iter(b'\t', leading_whitespace_or_tabs_str.as_bytes()).count();
 
-    match indent_style {
-        IndentStyle::Spaces => {
-            if spaces != cur_line_width {
-                errors.push(CheckError::WrongIndentStyle {
-                    line: cur_line_num,
-                    expected: indent_style,
-                    expected_tabs: 0,
-                    expected_spaces: cur_line_width,
-                    actual_spaces: spaces,
-                    actual_tabs: tabs,
-                });
-            }
-        }
-        IndentStyle::Tabs => {
-            let desired_tabs = cur_line_width.div_euclid(tab_width);
-            let desired_spaces = cur_line_width.rem_euclid(tab_width);
+    let (desired_tabs, desired_spaces) = match indent_style {
+        IndentStyle::Spaces => (0, cur_line_width),
+        IndentStyle::Tabs => (
+            cur_line_width.div_euclid(tab_width),
+            cur_line_width.rem_euclid(tab_width),
+        ),
+    };
 
-            if desired_tabs != tabs || spaces != desired_spaces {
-                errors.push(CheckError::WrongIndentStyle {
-                    line: cur_line_num,
-                    expected: indent_style,
-                    expected_tabs: desired_tabs,
-                    expected_spaces: desired_spaces,
-                    actual_spaces: spaces,
-                    actual_tabs: tabs,
-                });
-            }
-        }
+    if desired_tabs != tabs || spaces != desired_spaces {
+        errors.push(CheckError::WrongIndentStyle {
+            line: cur_line_num,
+            expected: indent_style,
+            expected_tabs: desired_tabs,
+            expected_spaces: desired_spaces,
+            actual_spaces: spaces,
+            actual_tabs: tabs,
+        });
     }
 
     let TrimTrailingWs::Value(trim_trailing_ws) = properties
@@ -85,7 +70,6 @@ fn check_editorconfig_properties_for_line(
     if let MaxLineLen::Value(max_line_len) =
         properties.get::<MaxLineLen>().unwrap_or(MaxLineLen::Off)
     {
-        // todo: handle charsets
         let line_len = cur_line.chars().count();
         if line_len > max_line_len {
             errors.push(CheckError::LineTooLong {
@@ -219,13 +203,13 @@ mod test {
     use ec4rs::property::IndentSize;
 
     #[test]
-    fn test_last_non_whitespace_or_tab_pos() {
-        assert_eq!(Some(4), last_non_whitespace_or_tab_pos("     potato"));
-        assert_eq!(Some(0), last_non_whitespace_or_tab_pos("\tpotato"));
-        assert_eq!(Some(2), last_non_whitespace_or_tab_pos("\t  potato"));
-        assert_eq!(None, last_non_whitespace_or_tab_pos("potato"));
-        assert_eq!(Some(0), last_non_whitespace_or_tab_pos(" "));
-        assert_eq!(Some(1), last_non_whitespace_or_tab_pos("  "));
+    fn test_first_non_whitespace_or_tab_pos() {
+        assert_eq!(Some(5), first_non_whitespace_or_tab_pos("     potato"));
+        assert_eq!(Some(1), first_non_whitespace_or_tab_pos("\tpotato"));
+        assert_eq!(Some(3), first_non_whitespace_or_tab_pos("\t  potato"));
+        assert_eq!(Some(0), first_non_whitespace_or_tab_pos("potato"));
+        assert_eq!(None, first_non_whitespace_or_tab_pos(" "));
+        assert_eq!(None, first_non_whitespace_or_tab_pos("  "));
     }
 
     #[test]
