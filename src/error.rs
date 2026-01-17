@@ -29,6 +29,7 @@ pub enum CheckError {
     IncorrectFileEncoding {
         charset: Charset,
     },
+    IOError,
 }
 
 impl std::fmt::Display for CheckError {
@@ -77,6 +78,9 @@ impl std::fmt::Display for CheckError {
                     "unable to decode file as {}, replacements were applied",
                     charset
                 )
+            }
+            CheckError::IOError => {
+                write!(f, "unable to open or read file")
             }
         }
     }

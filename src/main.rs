@@ -12,8 +12,10 @@ use std::sync::mpsc::channel;
 use clap::error::ErrorKind;
 use clap::{CommandFactory, Parser};
 
-use std::io::Write;
+use std::io::{Read, Write};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
+
+use human_units::Size;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -25,6 +27,10 @@ struct Args {
     /// Files to exclude.
     #[arg(long)]
     exclude: Vec<String>,
+
+    /// Skip files larger than this size. If set to 0, all files are checked irregardless of size.
+    #[arg(long, default_value = "1M", value_parser = clap::value_parser!(Size))]
+    max_file_size: Size,
 
     /// Path to a directory with files to check, or specific files to check.
     paths: Vec<PathBuf>,
@@ -63,6 +69,11 @@ fn main() {
         walk_builder.add(path);
     }
 
+    let max_file_size = match args.max_file_size {
+        Size(0) => None,
+        size => usize::try_from(size.0).ok(),
+    };
+
     walk_builder
         .filter_entry(move |entry| {
             let path_str = entry.path().to_string_lossy();
@@ -86,7 +97,7 @@ fn main() {
 
                 let file_path = entry.path().to_path_buf();
 
-                let result = check_file(&file_path);
+                let result = check_file(&file_path, max_file_size);
                 let _ = my_sender.send((file_path, result));
                 WalkState::Continue
             })
@@ -133,8 +144,25 @@ fn main() {
     }
 }
 
-fn check_file(path: &Path) -> Result<(), Vec<error::CheckError>> {
-    let content = fs::read(path).map_err(|_| vec![])?;
+fn check_file(path: &Path, max_file_size: Option<usize>) -> Result<(), Vec<error::CheckError>> {
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return Err(vec![error::CheckError::IOError]),
+    };
+
+    let size = file
+        .metadata()
+        .map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX))
+        .ok();
+    if max_file_size.is_some_and(|mfs| size.is_some_and(|file_size| file_size > mfs)) {
+        return Ok(());
+    }
+
+    let mut content = Vec::with_capacity(size.unwrap_or(8000));
+    match file.read_to_end(&mut content) {
+        Ok(_) => (),
+        Err(_) => return Err(vec![error::CheckError::IOError]),
+    };
 
     // skip over potential binary files
     if memchr(b'\0', &content[..content.len().min(8000)]).is_some() {
