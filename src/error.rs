@@ -24,11 +24,11 @@ pub enum CheckError {
     MissingFinalNewline,
     WrongFileEncoding {
         expected: Charset,
-        actual: Charset
+        actual: Charset,
     },
     IncorrectFileEncoding {
         charset: Charset,
-    }
+    },
 }
 
 impl std::fmt::Display for CheckError {
@@ -63,12 +63,20 @@ impl std::fmt::Display for CheckError {
             }
             CheckError::MissingFinalNewline => {
                 write!(f, "missing final newline")
-            },
+            }
             CheckError::WrongFileEncoding { expected, actual } => {
-                write!(f, "file expected to be encoded as {}, but sniffed {}", expected, actual)
-            },
+                write!(
+                    f,
+                    "file expected to be encoded as {}, but sniffed {}",
+                    expected, actual
+                )
+            }
             CheckError::IncorrectFileEncoding { charset } => {
-                write!(f, "unable to decode file as {}, replacements were applied", charset)
+                write!(
+                    f,
+                    "unable to decode file as {}, replacements were applied",
+                    charset
+                )
             }
         }
     }

@@ -1,6 +1,6 @@
+mod config;
 mod error;
 mod file;
-mod config;
 
 use ignore::{WalkBuilder, WalkState};
 use memchr::memchr;
@@ -12,7 +12,7 @@ use std::sync::mpsc::channel;
 use clap::error::ErrorKind;
 use clap::{CommandFactory, Parser};
 
-use std::io::{self, Write};
+use std::io::Write;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 #[derive(Parser, Debug)]
@@ -34,7 +34,11 @@ fn main() {
     let args = Args::parse();
 
     // Start from current directory
-    let first_path = if args.paths.len() > 0 { args.paths[0].clone() } else { std::env::current_dir().expect("Failed to get current directory") };
+    let first_path = if !args.paths.is_empty() {
+        args.paths[0].clone()
+    } else {
+        std::env::current_dir().expect("Failed to get current directory")
+    };
 
     let mut total_files = 0;
 
@@ -66,27 +70,27 @@ fn main() {
         })
         .build_parallel()
         .run(|| {
-        let my_sender = sender.clone();
-        Box::new(move |result| {
-            let entry = match result {
-                Ok(entry) => entry,
-                Err(e) => {
-                    eprintln!("Error walking directory: {}", e);
+            let my_sender = sender.clone();
+            Box::new(move |result| {
+                let entry = match result {
+                    Ok(entry) => entry,
+                    Err(e) => {
+                        eprintln!("Error walking directory: {}", e);
+                        return WalkState::Continue;
+                    }
+                };
+
+                if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
                     return WalkState::Continue;
                 }
-            };
 
-            if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
-                return WalkState::Continue;
-            }
+                let file_path = entry.path().to_path_buf();
 
-            let file_path = entry.path().to_path_buf();
-
-            let result = check_file(&file_path);
-            let _ = my_sender.send((file_path, result));
-            WalkState::Continue
-        })
-    });
+                let result = check_file(&file_path);
+                let _ = my_sender.send((file_path, result));
+                WalkState::Continue
+            })
+        });
 
     drop(sender);
 
@@ -103,7 +107,8 @@ fn main() {
     let _ = stdout.set_color(ColorSpec::new().set_fg(Some(Color::Red)));
 
     if !args.concise {
-        files_with_errors.sort_by(|(file_path_a, _), (file_path_b, _)| file_path_a.cmp(file_path_b));
+        files_with_errors
+            .sort_by(|(file_path_a, _), (file_path_b, _)| file_path_a.cmp(file_path_b));
         for (file_path, errors) in files_with_errors.iter() {
             let _ = writeln!(&mut stdout, "✗ {}", file_path.display());
             let _ = stdout.set_color(ColorSpec::new().set_fg(Some(Color::White)));
@@ -133,7 +138,7 @@ fn check_file(path: &Path) -> Result<(), Vec<error::CheckError>> {
 
     // skip over potential binary files
     if memchr(b'\0', &content[..content.len().min(8000)]).is_some() {
-        return Ok(())
+        return Ok(());
     }
 
     let properties = ec4rs::properties_of(path).map_err(|_| vec![])?;

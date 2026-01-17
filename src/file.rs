@@ -3,7 +3,7 @@ use crate::error::{CheckError, CheckResult};
 use ec4rs::{
     Properties,
     property::{
-        Charset, EndOfLine, FinalNewline, IndentSize, IndentStyle, MaxLineLen, TabWidth, TrimTrailingWs
+        Charset, EndOfLine, FinalNewline, IndentStyle, MaxLineLen, TabWidth, TrimTrailingWs,
     },
 };
 use memchr::memchr_iter;
@@ -99,9 +99,13 @@ fn check_editorconfig_properties_for_line(
     errors
 }
 
-fn check_editorconfig_line_endings(contents: &str, properties: &Properties, empty_file_passes: bool) -> CheckResult {
+fn check_editorconfig_line_endings(
+    contents: &str,
+    properties: &Properties,
+    empty_file_passes: bool,
+) -> CheckResult {
     let mut errors: CheckResult = vec![];
-    if empty_file_passes && contents.len() == 0 {
+    if empty_file_passes && contents.is_empty() {
         return errors;
     }
     let line_ending_mode = properties.get::<EndOfLine>().unwrap_or(EndOfLine::Lf);
@@ -125,7 +129,7 @@ fn check_editorconfig_line_endings(contents: &str, properties: &Properties, empt
 
     if !line_endings_match {
         errors.push(CheckError::WrongLineEnding {
-            expected: desired_le.escape_unicode().to_string()
+            expected: desired_le.escape_unicode().to_string(),
         });
     }
 
@@ -151,13 +155,13 @@ pub fn check_file_against_editorconfig(contents: &[u8], properties: &Properties)
         Charset::Utf8Bom => encoding_rs::UTF_8,
         Charset::Latin1 => encoding_rs::WINDOWS_1252,
         Charset::Utf16Le => encoding_rs::UTF_16LE,
-        Charset::Utf16Be => encoding_rs::UTF_16BE
+        Charset::Utf16Be => encoding_rs::UTF_16BE,
     };
 
     // Check for the presence of a BOM
-    let bom_present = encoding_rs::Encoding::for_bom(&contents) != None;
+    let bom_present = encoding_rs::Encoding::for_bom(contents).is_some();
 
-    let (decoded_string, sniffed_encoding, replacements) = specified_encoding.decode(&contents);
+    let (decoded_string, sniffed_encoding, replacements) = specified_encoding.decode(contents);
     if sniffed_encoding != specified_encoding {
         let reverse_encoding = if sniffed_encoding == encoding_rs::UTF_8 {
             Charset::Utf8
@@ -170,24 +174,41 @@ pub fn check_file_against_editorconfig(contents: &[u8], properties: &Properties)
         } else {
             unreachable!()
         };
-        errors.push(CheckError::WrongFileEncoding { expected: charset, actual: reverse_encoding });
+        errors.push(CheckError::WrongFileEncoding {
+            expected: charset,
+            actual: reverse_encoding,
+        });
     }
     // Special case: we *can* decode the string as UTF-8, but a BOM was present
     if sniffed_encoding == encoding_rs::UTF_8 {
         if !bom_present && charset == Charset::Utf8Bom {
-            errors.push(CheckError::WrongFileEncoding { expected: Charset::Utf8Bom, actual: Charset::Utf8 });
+            errors.push(CheckError::WrongFileEncoding {
+                expected: Charset::Utf8Bom,
+                actual: Charset::Utf8,
+            });
         } else if bom_present && charset == Charset::Utf8 {
-            errors.push(CheckError::WrongFileEncoding { expected: Charset::Utf8, actual: Charset::Utf8Bom });
+            errors.push(CheckError::WrongFileEncoding {
+                expected: Charset::Utf8,
+                actual: Charset::Utf8Bom,
+            });
         }
     }
     if replacements {
         errors.push(CheckError::IncorrectFileEncoding { charset });
     }
 
-    errors.extend_from_slice(&check_editorconfig_line_endings(&decoded_string, properties, true));
+    errors.extend_from_slice(&check_editorconfig_line_endings(
+        &decoded_string,
+        properties,
+        true,
+    ));
 
     for (i, line) in decoded_string.lines().enumerate() {
-        errors.extend_from_slice(&check_editorconfig_properties_for_line(i + 1, line, properties));
+        errors.extend_from_slice(&check_editorconfig_properties_for_line(
+            i + 1,
+            line,
+            properties,
+        ));
     }
     errors
 }
@@ -195,6 +216,7 @@ pub fn check_file_against_editorconfig(contents: &[u8], properties: &Properties)
 #[cfg(test)]
 mod test {
     use super::*;
+    use ec4rs::property::IndentSize;
 
     #[test]
     fn test_last_non_whitespace_or_tab_pos() {
@@ -283,7 +305,11 @@ mod test {
         }
 
         let errors = check_editorconfig_properties_for_line(1, "code", &properties);
-        assert!(errors.iter().all(|e| !matches!(e, CheckError::TrailingWhitespace { .. })));
+        assert!(
+            errors
+                .iter()
+                .all(|e| !matches!(e, CheckError::TrailingWhitespace { .. }))
+        );
     }
 
     #[test]
@@ -293,12 +319,30 @@ mod test {
         properties.insert(IndentStyle::Spaces);
 
         let errors = check_editorconfig_properties_for_line(1, "short line", &properties);
-        assert!(errors.iter().all(|e| !matches!(e, CheckError::LineTooLong { .. })));
+        assert!(
+            errors
+                .iter()
+                .all(|e| !matches!(e, CheckError::LineTooLong { .. }))
+        );
 
-        let errors = check_editorconfig_properties_for_line(1, "this is a very long line", &properties);
-        assert_eq!(errors.iter().filter(|e| matches!(e, CheckError::LineTooLong { .. })).count(), 1);
-        match errors.iter().find(|e| matches!(e, CheckError::LineTooLong { .. })) {
-            Some(CheckError::LineTooLong { line, actual_length, max_length }) => {
+        let errors =
+            check_editorconfig_properties_for_line(1, "this is a very long line", &properties);
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|e| matches!(e, CheckError::LineTooLong { .. }))
+                .count(),
+            1
+        );
+        match errors
+            .iter()
+            .find(|e| matches!(e, CheckError::LineTooLong { .. }))
+        {
+            Some(CheckError::LineTooLong {
+                line,
+                actual_length,
+                max_length,
+            }) => {
                 assert_eq!(*line, 1);
                 assert_eq!(*actual_length, 24);
                 assert_eq!(*max_length, 10);
@@ -379,7 +423,11 @@ mod test {
         properties.insert(FinalNewline::Value(true));
 
         let errors = check_editorconfig_line_endings("line1\nline2\n", &properties, true);
-        assert!(errors.iter().all(|e| !matches!(e, CheckError::MissingFinalNewline)));
+        assert!(
+            errors
+                .iter()
+                .all(|e| !matches!(e, CheckError::MissingFinalNewline))
+        );
     }
 
     #[test]
@@ -389,7 +437,13 @@ mod test {
         properties.insert(FinalNewline::Value(true));
 
         let errors = check_editorconfig_line_endings("line1\nline2", &properties, true);
-        assert_eq!(errors.iter().filter(|e| matches!(e, CheckError::MissingFinalNewline)).count(), 1);
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|e| matches!(e, CheckError::MissingFinalNewline))
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -417,7 +471,10 @@ mod test {
         properties.insert(Charset::Utf8);
 
         let errors = check_file_against_editorconfig(b"Hello UTF-8\n", &properties);
-        assert!(errors.is_empty(), "UTF-8 without BOM should pass for charset=utf-8");
+        assert!(
+            errors.is_empty(),
+            "UTF-8 without BOM should pass for charset=utf-8"
+        );
     }
 
     #[test]
@@ -427,7 +484,10 @@ mod test {
 
         let content = b"\xEF\xBB\xBFHello UTF-8 with BOM\n";
         let errors = check_file_against_editorconfig(content, &properties);
-        assert!(errors.is_empty(), "UTF-8 with BOM should pass for charset=utf-8-bom");
+        assert!(
+            errors.is_empty(),
+            "UTF-8 with BOM should pass for charset=utf-8-bom"
+        );
     }
 
     #[test]
@@ -437,7 +497,11 @@ mod test {
 
         let content = b"\xEF\xBB\xBFHello UTF-8 with BOM\n";
         let errors = check_file_against_editorconfig(content, &properties);
-        assert_eq!(errors.len(), 1, "UTF-8 with BOM should fail for charset=utf-8");
+        assert_eq!(
+            errors.len(),
+            1,
+            "UTF-8 with BOM should fail for charset=utf-8"
+        );
         match &errors[0] {
             CheckError::WrongFileEncoding { expected, actual } => {
                 assert_eq!(*expected, Charset::Utf8);
@@ -454,7 +518,11 @@ mod test {
 
         let content = b"Hello UTF-8 without BOM\n";
         let errors = check_file_against_editorconfig(content, &properties);
-        assert_eq!(errors.len(), 1, "UTF-8 without BOM should fail for charset=utf-8-bom");
+        assert_eq!(
+            errors.len(),
+            1,
+            "UTF-8 without BOM should fail for charset=utf-8-bom"
+        );
         match &errors[0] {
             CheckError::WrongFileEncoding { expected, actual } => {
                 assert_eq!(*expected, Charset::Utf8Bom);
@@ -472,7 +540,10 @@ mod test {
         // UTF-16LE BOM (FF FE) + "Hi\n" in UTF-16LE
         let content = b"\xFF\xFEH\x00i\x00\n\x00";
         let errors = check_file_against_editorconfig(content, &properties);
-        assert!(errors.is_empty(), "UTF-16LE with BOM should pass for charset=utf-16le");
+        assert!(
+            errors.is_empty(),
+            "UTF-16LE with BOM should pass for charset=utf-16le"
+        );
     }
 
     #[test]
@@ -483,7 +554,11 @@ mod test {
         // UTF-16LE BOM (FF FE) + "Hi\n" in UTF-16LE
         let content = b"\xFF\xFEH\x00i\x00\n\x00";
         let errors = check_file_against_editorconfig(content, &properties);
-        assert_eq!(errors.len(), 1, "UTF-16LE should fail when claimed as UTF-8");
+        assert_eq!(
+            errors.len(),
+            1,
+            "UTF-16LE should fail when claimed as UTF-8"
+        );
         match &errors[0] {
             CheckError::WrongFileEncoding { expected, actual } => {
                 assert_eq!(*expected, Charset::Utf8);
@@ -501,7 +576,10 @@ mod test {
         // UTF-16BE BOM (FE FF) + "Hi\n" in UTF-16BE
         let content = b"\xFE\xFF\x00H\x00i\x00\n";
         let errors = check_file_against_editorconfig(content, &properties);
-        assert!(errors.is_empty(), "UTF-16BE with BOM should pass for charset=utf-16be");
+        assert!(
+            errors.is_empty(),
+            "UTF-16BE with BOM should pass for charset=utf-16be"
+        );
     }
 
     #[test]
@@ -512,7 +590,10 @@ mod test {
         // Latin1: "Café\n" with é as 0xE9
         let content = b"Caf\xE9\n";
         let errors = check_file_against_editorconfig(content, &properties);
-        assert!(errors.is_empty(), "Latin1 content should pass for charset=latin1");
+        assert!(
+            errors.is_empty(),
+            "Latin1 content should pass for charset=latin1"
+        );
     }
 
     #[test]
@@ -528,9 +609,9 @@ mod test {
         // or incorrect encoding (replacements needed)
         assert!(!errors.is_empty(), "Malformed UTF-8 should produce errors");
         assert!(
-            errors.iter().any(|e| matches!(e,
-                CheckError::WrongFileEncoding { .. } |
-                CheckError::IncorrectFileEncoding { .. }
+            errors.iter().any(|e| matches!(
+                e,
+                CheckError::WrongFileEncoding { .. } | CheckError::IncorrectFileEncoding { .. }
             )),
             "Should detect encoding issue"
         );
