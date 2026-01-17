@@ -1,110 +1,19 @@
 mod error;
 mod file;
+mod config;
 
 use ignore::{WalkBuilder, WalkState};
+use memchr::memchr;
 use regex::RegexSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
-use std::sync::OnceLock;
 
 use clap::error::ErrorKind;
 use clap::{CommandFactory, Parser};
 
-static DEFAULT_EXCLUDES: OnceLock<RegexSet> = OnceLock::new();
-
-fn get_default_excludes() -> &'static RegexSet {
-    DEFAULT_EXCLUDES.get_or_init(|| {
-        let patterns = vec![
-            // source control related files and folders
-            r"\.git/",
-            r"\.jj/",
-            // package manager, generated, & lock files
-            // Cargo (Rust)
-            r"Cargo\.lock$",
-            r"/target/",
-            // Composer (PHP)
-            r"composer\.lock$",
-            // RubyGems (Ruby)
-            r"Gemfile\.lock$",
-            // Go Modules (Go)
-            r"go\.(mod|sum|work|work\.sum)$",
-            // Gradle (Java)
-            r"gradle/wrapper/gradle-wrapper\.properties$",
-            r"gradlew(\.bat)?$",
-            r"(buildscript-)?gradle\.lockfile?$",
-            // Maven (Java)
-            r"\.mvn/wrapper/maven-wrapper\.properties$",
-            r"\.mvn/wrapper/MavenWrapperDownloader\.java$",
-            r"mvnw(\.cmd)?$",
-            // NodeJS
-            r"/node_modules/",
-            // npm (NodeJS)
-            r"npm-shrinkwrap\.json$",
-            r"package-lock\.json$",
-            // pip (Python)
-            r"Pipfile\.lock$",
-            // Poetry (Python)
-            r"poetry\.lock$",
-            // pnpm (NodeJS)
-            r"pnpm-lock\.yaml$",
-            // Terraform & OpenTofu
-            r"\.terraform\.lock\.hcl$",
-            // uv (Python)
-            r"uv\.lock$",
-            // yarn (NodeJS)
-            r"\.pnp\.c?js$",
-            r"\.pnp\.loader\.mjs$",
-            r"\.yarn/",
-            r"yarn\.lock$",
-            // font files
-            r"\.eot$",
-            r"\.otf$",
-            r"\.ttf$",
-            r"\.woff2?$",
-            // image & video formats
-            r"\.avif$",
-            r"\.gif$",
-            r"\.ico$",
-            r"\.jpe?g$",
-            r"\.pcm$",
-            r"\.mp3$",
-            r"\.mp4$",
-            r"\.p[bgnp]m$",
-            r"\.png$",
-            r"\.svg$",
-            r"\.tiff?$",
-            r"\.webp$",
-            r"\.wmv$",
-            // other binary or container formats
-            r"\.bak$",
-            r"\.bin$",
-            r"\.docx?$",
-            r"\.exe$",
-            r"\.pdf$",
-            r"\.snap$",
-            r"\.xlsx?$",
-            // archive formats
-            r"\.7z$",
-            r"\.bz2$",
-            r"\.gz$",
-            r"\.jar$",
-            r"\.tar$",
-            r"\.tgz$",
-            r"\.war$",
-            r"\.zip$",
-            // log & (git) patch files
-            r"\.log$",
-            r"\.patch$",
-            // generated or minified CSS and JavaScript files
-            r"\.(css|js)\.map$",
-            r"min\.(css|js)$",
-            // emacs backup files
-            r"~$",
-        ];
-        RegexSet::new(patterns).expect("Failed to compile default exclude patterns")
-    })
-}
+use std::io::{self, Write};
+use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -131,7 +40,7 @@ fn main() {
 
     // Walk files, respecting .gitignore
     let (sender, receiver) = channel();
-    let excludes = get_default_excludes();
+    let excludes = config::get_default_excludes();
 
     let user_provided_excludes = match RegexSet::new(args.exclude) {
         Ok(user_provided_excludes) => user_provided_excludes,
@@ -173,25 +82,6 @@ fn main() {
 
             let file_path = entry.path().to_path_buf();
 
-            if let Ok(Some(mime_type)) = infer::get_from_path(&file_path) {
-                let mime_type_accepted = [
-                    "text/",
-                    "application/octet-stream",
-                    "application/ecmascript",
-                    "application/json",
-                    "application/x-ndjson",
-                    "application/xml",
-                    "+json",
-                    "+xml",
-                ];
-                if !mime_type_accepted
-                    .iter()
-                    .any(|mt| mime_type.mime_type().contains(mt))
-                {
-                    return WalkState::Continue;
-                }
-            }
-
             let result = check_file(&file_path);
             let _ = my_sender.send((file_path, result));
             WalkState::Continue
@@ -209,15 +99,24 @@ fn main() {
         total_files += 1;
     }
 
+    let mut stdout = StandardStream::stdout(ColorChoice::Auto);
+    let _ = stdout.set_color(ColorSpec::new().set_fg(Some(Color::Red)));
+
     if !args.concise {
-        files_with_errors.sort_by_key(|(file_path, _entries)| file_path.to_owned());
+        files_with_errors.sort_by(|(file_path_a, _), (file_path_b, _)| file_path_a.cmp(file_path_b));
         for (file_path, errors) in files_with_errors.iter() {
-            println!("✗ {}", file_path.display());
+            let _ = writeln!(&mut stdout, "✗ {}", file_path.display());
+            let _ = stdout.set_color(ColorSpec::new().set_fg(Some(Color::White)));
+
             for error in errors {
                 println!("  {}", error);
             }
+
+            let _ = stdout.set_color(ColorSpec::new().set_fg(Some(Color::Red)));
         }
     }
+
+    let _ = stdout.reset();
 
     println!(
         "\nChecked {} files, {} failed",
@@ -230,9 +129,14 @@ fn main() {
 }
 
 fn check_file(path: &Path) -> Result<(), Vec<error::CheckError>> {
-    let properties = ec4rs::properties_of(path).map_err(|_| vec![])?;
-
     let content = fs::read(path).map_err(|_| vec![])?;
+
+    // skip over potential binary files
+    if memchr(b'\0', &content[..content.len().min(8000)]).is_some() {
+        return Ok(())
+    }
+
+    let properties = ec4rs::properties_of(path).map_err(|_| vec![])?;
 
     let errors = file::check_file_against_editorconfig(&content, &properties);
 
