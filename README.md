@@ -37,11 +37,11 @@ trim_trailing_whitespace = false
 
 </details>
 
-`editorconfig-checker` 3.6.0:
+`editorconfig-checker` 3.6.0 (without `-disable-indent-size`, as eddy doesn't do this check at all):
 
 ```
-  Time (mean ± σ):     11.137 s ±  0.055 s    [User: 84.998 s, System: 3.541 s]
-  Range (min … max):   11.051 s … 11.185 s    5 runs
+    Time (mean ± σ):      3.668 s ±  0.021 s    [User: 18.099 s, System: 2.113 s]
+    Range (min … max):    3.655 s …  3.692 s    3 runs
 ```
 
 `eddy`:
@@ -51,4 +51,4 @@ trim_trailing_whitespace = false
   Range (min … max):   322.0 ms … 586.6 ms    5 runs
 ```
 
-`eddy` is 25.8x faster.
+`eddy` is ~8x faster.
