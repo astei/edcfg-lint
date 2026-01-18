@@ -1,4 +1,5 @@
 mod config;
+mod ec;
 mod error;
 mod file;
 
@@ -169,7 +170,7 @@ fn check_file(path: &Path, max_file_size: Option<usize>) -> Result<(), Vec<error
         return Ok(());
     }
 
-    let properties = ec4rs::properties_of(path).map_err(|_| vec![])?;
+    let properties = ec::properties_of_cached(path).map_err(|_| vec![])?;
 
     let errors = file::check_file_against_editorconfig(&content, &properties);
 
