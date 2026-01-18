@@ -2,7 +2,24 @@
 
 A fast `editorconfig` linter written in Rust. It is many times faster than [`editorconfig-checker`](https://github.com/editorconfig-checker/editorconfig-checker).
 
-Still a work in progress, in particular the harness is mostly vibe-coded and needs a serious refresh.
+Still a work in progress, in particular the harness is mostly vibe-coded and needs a serious refresh. However, it already approaches the limits of what the hardware and OS can do despite this.
+
+## How it works inside
+
+There honestly isn't a lot of magic: we use standard Rust crates.
+
+* `ignore` is used for walking and parallelism.
+* `ec4rs` is used as our EditorConfig core.
+* `memchr` is used for some fast (substring and character) searches.
+* `encoding_rs` is used to handle charset detection and decoding.
+
+Eddy primarily comprises of:
+
+* The harness (`src/main.rs`)
+* The checker (`src/file.rs`)
+* A caching version of `ec4rs::properties_of` (`src/ec.rs`)
+
+These crates are highly optimized (we're using a bunch of stuff that makes `ripgrep` so fast).
 
 ## Performance
 
@@ -40,8 +57,8 @@ trim_trailing_whitespace = false
 `editorconfig-checker` 3.6.0 (without `-disable-indent-size`, as eddy doesn't do this check at all):
 
 ```
-    Time (mean ± σ):      3.668 s ±  0.021 s    [User: 18.099 s, System: 2.113 s]
-    Range (min … max):    3.655 s …  3.692 s    3 runs
+  Time (mean ± σ):      3.668 s ±  0.021 s    [User: 18.099 s, System: 2.113 s]
+  Range (min … max):    3.655 s …  3.692 s    3 runs
 ```
 
 `eddy`:

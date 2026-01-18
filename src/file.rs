@@ -63,7 +63,10 @@ fn check_editorconfig_properties_for_line(
     let TrimTrailingWs::Value(trim_trailing_ws) = properties
         .get::<TrimTrailingWs>()
         .unwrap_or(TrimTrailingWs::Value(true));
-    if trim_trailing_ws && cur_line.trim_end().len() != cur_line.len() {
+    if trim_trailing_ws
+        && let Some(last_char) = cur_line.chars().next_back()
+        && (last_char == ' ' || last_char == '\t')
+    {
         errors.push(CheckError::TrailingWhitespace { line: cur_line_num });
     }
 
