@@ -21,38 +21,65 @@ fn line_space_width(line: &str, tab_width: usize) -> usize {
         .sum()
 }
 
+/// Extracted EditorConfig properties that are checked per-line.
+/// This allows us to amortize the property lookups across all lines in a file.
+struct LineCheckConfig {
+    tab_width: usize,
+    indent_style: IndentStyle,
+    trim_trailing_ws: bool,
+    max_line_len: Option<usize>,
+}
+
+impl LineCheckConfig {
+    fn from_properties(properties: &Properties) -> Self {
+        let TabWidth::Value(tab_width) = properties.get::<TabWidth>().unwrap_or(TabWidth::Value(4));
+        let indent_style = properties
+            .get::<IndentStyle>()
+            .unwrap_or(IndentStyle::Spaces);
+        let TrimTrailingWs::Value(trim_trailing_ws) = properties
+            .get::<TrimTrailingWs>()
+            .unwrap_or(TrimTrailingWs::Value(true));
+        let max_line_len = match properties.get::<MaxLineLen>().unwrap_or(MaxLineLen::Off) {
+            MaxLineLen::Value(len) => Some(len),
+            MaxLineLen::Off => None,
+        };
+
+        LineCheckConfig {
+            tab_width,
+            indent_style,
+            trim_trailing_ws,
+            max_line_len,
+        }
+    }
+}
+
 fn check_editorconfig_properties_for_line(
     cur_line_num: usize,
     cur_line: &str,
-    properties: &Properties,
+    config: &LineCheckConfig,
 ) -> CheckResult {
-    let TabWidth::Value(tab_width) = properties.get::<TabWidth>().unwrap_or(TabWidth::Value(4));
-
     let mut errors: CheckResult = vec![];
-    let cur_line_width = line_space_width(cur_line, tab_width);
+    let cur_line_width = line_space_width(cur_line, config.tab_width);
 
     // check indentation style
-    let indent_style = properties
-        .get::<IndentStyle>()
-        .unwrap_or(IndentStyle::Spaces);
     let leading_whitespace_or_tabs_str = first_non_whitespace_or_tab_pos(cur_line)
         .map(|pos| &cur_line[0..pos])
         .unwrap_or(cur_line);
     let spaces = memchr_iter(b' ', leading_whitespace_or_tabs_str.as_bytes()).count();
     let tabs = memchr_iter(b'\t', leading_whitespace_or_tabs_str.as_bytes()).count();
 
-    let (desired_tabs, desired_spaces) = match indent_style {
+    let (desired_tabs, desired_spaces) = match config.indent_style {
         IndentStyle::Spaces => (0, cur_line_width),
         IndentStyle::Tabs => (
-            cur_line_width.div_euclid(tab_width),
-            cur_line_width.rem_euclid(tab_width),
+            cur_line_width.div_euclid(config.tab_width),
+            cur_line_width.rem_euclid(config.tab_width),
         ),
     };
 
     if desired_tabs != tabs || spaces != desired_spaces {
         errors.push(CheckError::WrongIndentStyle {
             line: cur_line_num,
-            expected: indent_style,
+            expected: config.indent_style,
             expected_tabs: desired_tabs,
             expected_spaces: desired_spaces,
             actual_spaces: spaces,
@@ -60,19 +87,14 @@ fn check_editorconfig_properties_for_line(
         });
     }
 
-    let TrimTrailingWs::Value(trim_trailing_ws) = properties
-        .get::<TrimTrailingWs>()
-        .unwrap_or(TrimTrailingWs::Value(true));
-    if trim_trailing_ws
+    if config.trim_trailing_ws
         && let Some(last_char) = cur_line.chars().next_back()
         && (last_char == ' ' || last_char == '\t')
     {
         errors.push(CheckError::TrailingWhitespace { line: cur_line_num });
     }
 
-    if let MaxLineLen::Value(max_line_len) =
-        properties.get::<MaxLineLen>().unwrap_or(MaxLineLen::Off)
-    {
+    if let Some(max_line_len) = config.max_line_len {
         let line_len = cur_line.chars().count();
         if line_len > max_line_len {
             errors.push(CheckError::LineTooLong {
@@ -102,11 +124,13 @@ fn check_editorconfig_line_endings(
         EndOfLine::CrLf => "\r\n",
     };
 
-    let desired_endings =
-        memchr::memmem::find_iter(contents.as_bytes(), desired_le.as_bytes()).count();
+    let content_bytes = contents.as_bytes();
 
-    let crs = memchr_iter(b'\r', contents.as_bytes()).count();
-    let lfs = memchr_iter(b'\n', contents.as_bytes()).count();
+    let desired_endings =
+        memchr::memmem::find_iter(content_bytes, desired_le.as_bytes()).count();
+
+    let crs = memchr_iter(b'\r', content_bytes).count();
+    let lfs = memchr_iter(b'\n', content_bytes).count();
 
     let line_endings_match = match line_ending_mode {
         EndOfLine::Cr => crs == desired_endings && lfs == 0,
@@ -190,11 +214,13 @@ pub fn check_file_against_editorconfig(contents: &[u8], properties: &Properties)
         true,
     ));
 
+    // Extract properties once for all lines to amortize hashmap lookups
+    let line_config = LineCheckConfig::from_properties(properties);
     for (i, line) in decoded_string.lines().enumerate() {
         errors.extend_from_slice(&check_editorconfig_properties_for_line(
             i + 1,
             line,
-            properties,
+            &line_config,
         ));
     }
     errors
@@ -232,7 +258,8 @@ mod test {
         properties.insert(TabWidth::Value(4));
         properties.insert(IndentStyle::Spaces);
 
-        let errors = check_editorconfig_properties_for_line(1, "    code", &properties);
+        let config = LineCheckConfig::from_properties(&properties);
+        let errors = check_editorconfig_properties_for_line(1, "    code", &config);
         assert!(errors.is_empty());
     }
 
@@ -243,10 +270,11 @@ mod test {
         properties.insert(TabWidth::Value(4));
         properties.insert(IndentStyle::Spaces);
 
-        let errors = check_editorconfig_properties_for_line(1, "    code", &properties);
+        let config = LineCheckConfig::from_properties(&properties);
+        let errors = check_editorconfig_properties_for_line(1, "    code", &config);
         assert!(errors.is_empty());
 
-        let errors = check_editorconfig_properties_for_line(1, "\tcode", &properties);
+        let errors = check_editorconfig_properties_for_line(1, "\tcode", &config);
         assert_eq!(errors.len(), 1);
         match &errors[0] {
             CheckError::WrongIndentStyle { expected, .. } => {
@@ -263,10 +291,11 @@ mod test {
         properties.insert(TabWidth::Value(4));
         properties.insert(IndentStyle::Tabs);
 
-        let errors = check_editorconfig_properties_for_line(1, "\tcode", &properties);
+        let config = LineCheckConfig::from_properties(&properties);
+        let errors = check_editorconfig_properties_for_line(1, "\tcode", &config);
         assert!(errors.is_empty());
 
-        let errors = check_editorconfig_properties_for_line(1, "    code", &properties);
+        let errors = check_editorconfig_properties_for_line(1, "    code", &config);
         assert_eq!(errors.len(), 1);
         match &errors[0] {
             CheckError::WrongIndentStyle { expected, .. } => {
@@ -282,7 +311,8 @@ mod test {
         properties.insert(TrimTrailingWs::Value(true));
         properties.insert(IndentStyle::Spaces);
 
-        let errors = check_editorconfig_properties_for_line(1, "code  ", &properties);
+        let config = LineCheckConfig::from_properties(&properties);
+        let errors = check_editorconfig_properties_for_line(1, "code  ", &config);
         assert_eq!(errors.len(), 1);
         match &errors[0] {
             CheckError::TrailingWhitespace { line } => {
@@ -291,7 +321,7 @@ mod test {
             _ => panic!("Expected TrailingWhitespace error"),
         }
 
-        let errors = check_editorconfig_properties_for_line(1, "code", &properties);
+        let errors = check_editorconfig_properties_for_line(1, "code", &config);
         assert!(
             errors
                 .iter()
@@ -305,7 +335,8 @@ mod test {
         properties.insert(MaxLineLen::Value(10));
         properties.insert(IndentStyle::Spaces);
 
-        let errors = check_editorconfig_properties_for_line(1, "short line", &properties);
+        let config = LineCheckConfig::from_properties(&properties);
+        let errors = check_editorconfig_properties_for_line(1, "short line", &config);
         assert!(
             errors
                 .iter()
@@ -313,7 +344,7 @@ mod test {
         );
 
         let errors =
-            check_editorconfig_properties_for_line(1, "this is a very long line", &properties);
+            check_editorconfig_properties_for_line(1, "this is a very long line", &config);
         assert_eq!(
             errors
                 .iter()
