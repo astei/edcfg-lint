@@ -7,6 +7,20 @@ use ec4rs::{
     },
 };
 use memchr::memchr_iter;
+use memchr::memmem;
+
+const EDDY_PREFIX: &str = "eddy-";
+const EDDY_SKIP_FILE: &str = "eddy-disable-file";
+const EDDY_SKIP_NEXT_LINE: &str = "eddy-disable-next-line";
+const EDDY_SKIP_THIS_LINE: &str = "eddy-disable-line";
+const EDDY_SKIP_DISABLE_BLOCK: &str = "eddy-off";
+const EDDY_SKIP_ENABLE_BLOCK: &str = "eddy-on";
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+enum DeferredSkipState {
+    NextLine,
+    DisabledBlock,
+}
 
 fn first_non_whitespace_or_tab_pos(line: &str) -> Option<usize> {
     line.bytes().position(|b| b != b' ' && b != b'\t')
@@ -126,8 +140,7 @@ fn check_editorconfig_line_endings(
 
     let content_bytes = contents.as_bytes();
 
-    let desired_endings =
-        memchr::memmem::find_iter(content_bytes, desired_le.as_bytes()).count();
+    let desired_endings = memmem::find_iter(content_bytes, desired_le.as_bytes()).count();
 
     let crs = memchr_iter(b'\r', content_bytes).count();
     let lfs = memchr_iter(b'\n', content_bytes).count();
@@ -208,6 +221,12 @@ pub fn check_file_against_editorconfig(contents: &[u8], properties: &Properties)
         errors.push(CheckError::IncorrectFileEncoding { charset });
     }
 
+    if let Some(first_line) = decoded_string.lines().next()
+        && first_line.contains(EDDY_SKIP_FILE)
+    {
+        return vec![];
+    }
+
     errors.extend_from_slice(&check_editorconfig_line_endings(
         &decoded_string,
         properties,
@@ -216,7 +235,37 @@ pub fn check_file_against_editorconfig(contents: &[u8], properties: &Properties)
 
     // Extract properties once for all lines to amortize hashmap lookups
     let line_config = LineCheckConfig::from_properties(properties);
+
+    // Set up logic for skipping code as needed
+    let mut deferred_skip_state: Option<DeferredSkipState> = None;
+    let eddy_prefix_finder = memmem::Finder::new(EDDY_PREFIX.as_bytes());
+
     for (i, line) in decoded_string.lines().enumerate() {
+        if deferred_skip_state.is_none() {
+            if eddy_prefix_finder.find(line.as_bytes()).is_some() {
+                if line.contains(EDDY_SKIP_THIS_LINE) {
+                    continue;
+                } else if line.contains(EDDY_SKIP_NEXT_LINE) {
+                    deferred_skip_state = Some(DeferredSkipState::NextLine);
+                } else if line.contains(EDDY_SKIP_DISABLE_BLOCK) {
+                    deferred_skip_state = Some(DeferredSkipState::DisabledBlock);
+                }
+            }
+        } else {
+            match deferred_skip_state.unwrap() {
+                DeferredSkipState::NextLine => {
+                    deferred_skip_state = None;
+                    continue;
+                }
+                DeferredSkipState::DisabledBlock => {
+                    if line.contains(EDDY_SKIP_ENABLE_BLOCK) {
+                        deferred_skip_state = None;
+                    }
+                    continue;
+                }
+            }
+        }
+
         errors.extend_from_slice(&check_editorconfig_properties_for_line(
             i + 1,
             line,
@@ -343,8 +392,7 @@ mod test {
                 .all(|e| !matches!(e, CheckError::LineTooLong { .. }))
         );
 
-        let errors =
-            check_editorconfig_properties_for_line(1, "this is a very long line", &config);
+        let errors = check_editorconfig_properties_for_line(1, "this is a very long line", &config);
         assert_eq!(
             errors
                 .iter()
@@ -632,6 +680,179 @@ mod test {
                 CheckError::WrongFileEncoding { .. } | CheckError::IncorrectFileEncoding { .. }
             )),
             "Should detect encoding issue"
+        );
+    }
+
+    #[test]
+    fn test_skip_file_directive() {
+        let mut properties = Properties::default();
+        properties.insert(IndentStyle::Spaces);
+        properties.insert(TrimTrailingWs::Value(true));
+
+        // File with eddy-disable-file on first line should skip all checks
+        let content = b"// eddy-disable-file\n\tindent with tabs  \n";
+        let errors = check_file_against_editorconfig(content, &properties);
+        assert!(
+            errors.is_empty(),
+            "eddy-disable-file should skip all checks"
+        );
+
+        // Same content without the directive should produce errors
+        let content_no_skip = b"// some comment\n\tindent with tabs  \n";
+        let errors = check_file_against_editorconfig(content_no_skip, &properties);
+        assert!(
+            !errors.is_empty(),
+            "Without eddy-disable-file, errors should be reported"
+        );
+    }
+
+    #[test]
+    fn test_skip_file_directive_must_be_first_line() {
+        let mut properties = Properties::default();
+        properties.insert(IndentStyle::Spaces);
+        properties.insert(TrimTrailingWs::Value(true));
+
+        // eddy-disable-file on second line should NOT skip the file
+        let content = b"// some comment\n// eddy-disable-file\n\tindent with tabs  \n";
+        let errors = check_file_against_editorconfig(content, &properties);
+        assert!(
+            !errors.is_empty(),
+            "eddy-disable-file on non-first line should not skip file"
+        );
+    }
+
+    #[test]
+    fn test_skip_this_line_directive() {
+        let mut properties = Properties::default();
+        properties.insert(IndentStyle::Spaces);
+        properties.insert(TrimTrailingWs::Value(true));
+
+        // Line with eddy-disable-line should be skipped
+        let content = b"\tbad indent // eddy-disable-line\ngood line\n";
+        let errors = check_file_against_editorconfig(content, &properties);
+        assert!(
+            errors.is_empty(),
+            "eddy-disable-line should skip checking that line"
+        );
+
+        // Same content without directive should produce error
+        let content_no_skip = b"\tbad indent // some comment\ngood line\n";
+        let errors = check_file_against_editorconfig(content_no_skip, &properties);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, CheckError::WrongIndentStyle { line: 1, .. })),
+            "Without eddy-disable-line, indent error should be reported"
+        );
+    }
+
+    #[test]
+    fn test_skip_next_line_directive() {
+        let mut properties = Properties::default();
+        properties.insert(IndentStyle::Spaces);
+        properties.insert(TrimTrailingWs::Value(true));
+
+        // Line after eddy-disable-next-line should be skipped
+        let content = b"// eddy-disable-next-line\n\tbad indent  \ngood line\n";
+        let errors = check_file_against_editorconfig(content, &properties);
+        assert!(
+            errors.is_empty(),
+            "eddy-disable-next-line should skip checking the following line"
+        );
+
+        // Same content without directive should produce errors
+        let content_no_skip = b"// some comment\n\tbad indent  \ngood line\n";
+        let errors = check_file_against_editorconfig(content_no_skip, &properties);
+        assert!(
+            !errors.is_empty(),
+            "Without eddy-disable-next-line, errors should be reported"
+        );
+    }
+
+    #[test]
+    fn test_skip_next_line_only_skips_one_line() {
+        let mut properties = Properties::default();
+        properties.insert(IndentStyle::Spaces);
+        properties.insert(TrimTrailingWs::Value(true));
+
+        // eddy-disable-next-line should only skip the immediately following line
+        let content = b"// eddy-disable-next-line\n\tskipped line\n\tnot skipped\n";
+        let errors = check_file_against_editorconfig(content, &properties);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, CheckError::WrongIndentStyle { line: 3, .. })),
+            "eddy-disable-next-line should only skip one line"
+        );
+    }
+
+    #[test]
+    fn test_skip_block_directive() {
+        let mut properties = Properties::default();
+        properties.insert(IndentStyle::Spaces);
+        properties.insert(TrimTrailingWs::Value(true));
+
+        // Lines between eddy-off and eddy-on should be skipped
+        let content = b"good line\n// eddy-off\n\tbad line 1  \n\tbad line 2  \n// eddy-on\ngood line\n";
+        let errors = check_file_against_editorconfig(content, &properties);
+        assert!(
+            errors.is_empty(),
+            "Lines between eddy-off and eddy-on should be skipped"
+        );
+
+        // Same content without directives should produce errors
+        let content_no_skip =
+            b"good line\n// comment\n\tbad line 1  \n\tbad line 2  \n// comment\ngood line\n";
+        let errors = check_file_against_editorconfig(content_no_skip, &properties);
+        assert!(
+            !errors.is_empty(),
+            "Without eddy-off/eddy-on, errors should be reported"
+        );
+    }
+
+    #[test]
+    fn test_skip_block_without_enable() {
+        let mut properties = Properties::default();
+        properties.insert(IndentStyle::Spaces);
+        properties.insert(TrimTrailingWs::Value(true));
+
+        // eddy-off without eddy-on should skip all remaining lines
+        let content = b"good line\n// eddy-off\n\tbad line 1  \n\tbad line 2  \n";
+        let errors = check_file_against_editorconfig(content, &properties);
+        assert!(
+            errors.is_empty(),
+            "eddy-off without eddy-on should skip all remaining lines"
+        );
+    }
+
+    #[test]
+    fn test_skip_directives_in_various_comment_styles() {
+        let mut properties = Properties::default();
+        properties.insert(IndentStyle::Spaces);
+        properties.insert(TrimTrailingWs::Value(true));
+
+        // eddy-disable-line in different comment styles
+        let content_c_style = b"\tbad indent /* eddy-disable-line */\n";
+        let errors = check_file_against_editorconfig(content_c_style, &properties);
+        assert!(errors.is_empty(), "eddy-disable-line should work in C-style comments");
+
+        let content_hash = b"\tbad indent # eddy-disable-line\n";
+        let errors = check_file_against_editorconfig(content_hash, &properties);
+        assert!(errors.is_empty(), "eddy-disable-line should work with hash comments");
+    }
+
+    #[test]
+    fn test_multiple_skip_blocks() {
+        let mut properties = Properties::default();
+        properties.insert(IndentStyle::Spaces);
+        properties.insert(TrimTrailingWs::Value(true));
+
+        // Multiple eddy-off/eddy-on blocks
+        let content = b"good\n// eddy-off\n\tbad\n// eddy-on\ngood\n// eddy-off\n\tbad\n// eddy-on\ngood\n";
+        let errors = check_file_against_editorconfig(content, &properties);
+        assert!(
+            errors.is_empty(),
+            "Multiple eddy-off/eddy-on blocks should all be respected"
         );
     }
 }
