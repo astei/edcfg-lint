@@ -1,0 +1,155 @@
+name: Rust release
+
+# Only do the release on x.y.z tags.
+on:
+    push:
+        tags:
+            - "[0-9]+.[0-9]+.[0-9]+"
+
+# We need this to be able to create releases.
+permissions:
+    contents: write
+
+env:
+    CARGO_TERM_COLOR: always
+
+jobs:
+    # The create-release job runs purely to initialize the GitHub release itself,
+    # and names the release after the `x.y.z` tag that was pushed. It's separate
+    # from building the release so that we only create the release once.
+    create-release:
+        name: create-release
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - name: Get the release version from the tag
+              if: env.VERSION == ''
+              run: echo "VERSION=${{ github.ref_name }}" >> $GITHUB_ENV
+            - name: Show the version
+              run: |
+                  echo "version is: $VERSION"
+            - name: Check that tag version and Cargo.toml version are the same
+              shell: bash
+              run: |
+                  if ! grep -q "version = \"$VERSION\"" Cargo.toml; then
+                    echo "version does not match Cargo.toml" >&2
+                    exit 1
+                  fi
+            - name: Create GitHub release
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: gh release create $VERSION --draft --verify-tag --title $VERSION
+        outputs:
+            version: ${{ env.VERSION }}
+
+    # The build-release job runs to build the release artifacts.
+    build-release:
+        name: build-release
+        runs-on: ${{ matrix.os }}
+        env:
+            CARGO: cargo
+            # When CARGO is set to CROSS, this is set to `--target matrix.target`.
+            TARGET_FLAGS: ""
+            # When CARGO is set to CROSS, TARGET_DIR includes matrix.target.
+            TARGET_DIR: ./target
+        needs: create-release
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    # Note: I disabled the non-essential builds for testing.
+
+                    # Linux builds
+                    # - os: ubuntu-latest
+                    #   target: x86_64-unknown-linux-gnu
+                    - os: ubuntu-latest
+                      target: x86_64-unknown-linux-musl
+
+                    - os: ubuntu-latest
+                      target: i686-unknown-linux-gnu
+                    # - os: ubuntu-latest
+                    #   target: i686-unknown-linux-musl
+
+                    - os: ubuntu-24.04-arm
+                      target: aarch64-unknown-linux-gnu
+                    - os: ubuntu-24.04-arm
+                      target: aarch64-unknown-linux-musl
+
+                    # - os: ubuntu-24.04-arm
+                    #   target: armv7-unknown-linux-gnueabihf
+                    # - os: ubuntu-24.04-arm
+                    #   target: armv7-unknown-linux-musleabihf
+
+                    # macOS
+                    # - os: macos-latest
+                    #   target: x86_64-apple-darwin
+                    - os: macos-latest
+                      target: aarch64-apple-darwin
+
+                    # Windows
+                    - os: windows-latest
+                      target: x86_64-pc-windows-msvc
+                    # - os: windows-latest
+                    #   target: i686-pc-windows-msvc
+
+                    - os: windows-arm
+                      target: aarch64-pc-windows-msvc
+
+        steps:
+            - uses: actions/checkout@v4
+            - name: Install Cross
+              if: runner.os == 'Linux' && matrix.target != ''
+              run: cargo install cross --tag v0.2.5 --git https://github.com/cross-rs/cross && echo "CARGO=cross" >> $GITHUB_ENV
+
+            - name: Set target variables
+              shell: bash
+              run: |
+                  echo "TARGET_FLAGS=--target ${{ matrix.target }}" >> $GITHUB_ENV
+                  echo "TARGET_DIR=./target/${{ matrix.target }}" >> $GITHUB_ENV
+
+            - name: Show command used for Cargo
+              shell: bash
+              run: |
+                  echo "cargo command is: ${{ env.CARGO }}"
+                  echo "target flag is: ${{ env.TARGET_FLAGS }}"
+                  echo "target dir is: ${{ env.TARGET_DIR }}"
+
+            - name: Build release binary
+              shell: bash
+              run: |
+                  ${{ env.CARGO }} build --verbose --profile release-lto ${{ env.TARGET_FLAGS }}
+                  if [[ "${{ matrix.os }}" == windows-* ]]; then
+                    bin="target/${{ matrix.target }}/release-lto/eddy.exe"
+                    final_bin="eddy.exe"
+                  else
+                    bin="target/${{ matrix.target }}/release-lto/eddy"
+                    final_bin="eddy"
+                  fi
+
+                  cp $bin $final_bin
+                  echo "BIN=$final_bin" >> $GITHUB_ENV
+                  version="${{ needs.create-release.outputs.version }}"
+                  echo "ARCHIVE=eddy-$version-${{ matrix.target }}" >> $GITHUB_ENV
+
+            - name: Build archive (Windows)
+              shell: bash
+              if: startsWith(matrix.os, 'windows')
+              run: |
+                  7z a "$ARCHIVE.zip" "$BIN"
+                  certutil -hashfile "$ARCHIVE.zip" SHA256 > "$ARCHIVE.zip.sha256"
+                  echo "ASSET=$ARCHIVE.zip" >> $GITHUB_ENV
+                  echo "ASSET_SUM=$ARCHIVE.zip.sha256" >> $GITHUB_ENV
+
+            - name: Build archive (Unix)
+              shell: bash
+              if: ${{ !startsWith(matrix.os, 'windows') }}
+              run: |
+                  tar czf "$ARCHIVE.tar.gz" "$BIN"
+                  shasum -a 256 "$ARCHIVE.tar.gz" > "$ARCHIVE.tar.gz.sha256"
+                  echo "ASSET=$ARCHIVE.tar.gz" >> $GITHUB_ENV
+                  echo "ASSET_SUM=$ARCHIVE.tar.gz.sha256" >> $GITHUB_ENV
+
+            - name: Upload the release
+              shell: bash
+              run: |
+                  gh release upload ${{ needs.create-release.outputs.version }} ${{ env.ASSET }} ${{ env.ASSET_SUM }}
