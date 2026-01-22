@@ -106,25 +106,25 @@ pub fn properties_of_cached(path: impl AsRef<Path>) -> Result<Properties, Error>
         // Assume we need to load. It is OK if we do duplicate parsing - it's wasted work, but it is
         // fairly cheap. We eagerly parse the editorconfig in each case as we can quickly borrow a
         // reference to it.
-        let loaded_config = match ConfigFile::open(&config_path) {
+        let maybe_loaded_config = match ConfigFile::open(&config_path) {
             Ok(mut opened_config) => {
                 let parsed = EagerlyParsedEditorConfig::from_config_file(&mut opened_config)?;
-                let parsed_arc = Arc::new(parsed);
-                cache.insert(config_path.clone(), Some(parsed_arc.clone()));
-                parsed_arc
+                Some(Arc::new(parsed))
             }
             Err(_) => {
                 // File doesn't exist or failed to parse, skip
-                current = dir;
-                cache.insert(config_path.clone(), None);
-                continue;
+                None
             }
         };
 
-        let is_root = loaded_config.is_root;
-        loaded_config.apply_to(&mut properties, abs_path.as_ref())?;
-        if is_root {
-            break;
+        cache.insert(config_path.clone(), maybe_loaded_config.clone());
+
+        if let Some(loaded_config) = maybe_loaded_config {
+            let is_root = loaded_config.is_root;
+            loaded_config.apply_to(&mut properties, abs_path.as_ref())?;
+            if is_root {
+                break;
+            }
         }
 
         current = dir;
