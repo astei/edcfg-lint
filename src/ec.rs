@@ -66,6 +66,8 @@ impl PropertiesSource for &EagerlyParsedEditorConfig {
 ///
 /// EditorConfig files are assumed to be named `.editorconfig`.
 pub fn properties_of_cached(path: impl AsRef<Path>) -> Result<Properties, Error> {
+    // I have benchmarked this, and hashing just doesn't play a significant role in performance.
+    // So we'll use the default SipHash-1-3.
     static PARSED_EDITORCONFIG_CACHE: OnceLock<
         DashMap<PathBuf, Option<Arc<EagerlyParsedEditorConfig>>>,
     > = OnceLock::new();

@@ -71,8 +71,8 @@ fn check_editorconfig_properties_for_line(
     cur_line_num: usize,
     cur_line: &str,
     config: &LineCheckConfig,
-) -> CheckResult {
-    let mut errors: CheckResult = vec![];
+    errors: &mut CheckResult,
+) {
     let cur_line_width = line_space_width(cur_line, config.tab_width);
 
     // check indentation style
@@ -118,18 +118,16 @@ fn check_editorconfig_properties_for_line(
             });
         }
     }
-
-    errors
 }
 
 fn check_editorconfig_line_endings(
     contents: &str,
     properties: &Properties,
     empty_file_passes: bool,
-) -> CheckResult {
-    let mut errors: CheckResult = vec![];
+    errors: &mut CheckResult,
+) {
     if empty_file_passes && contents.is_empty() {
-        return errors;
+        return;
     }
     let line_ending_mode = properties.get::<EndOfLine>().unwrap_or(EndOfLine::Lf);
     let desired_le = match line_ending_mode {
@@ -165,8 +163,6 @@ fn check_editorconfig_line_endings(
             errors.push(CheckError::MissingFinalNewline);
         }
     }
-
-    errors
 }
 
 pub fn check_file_against_editorconfig(contents: &[u8], properties: &Properties) -> CheckResult {
@@ -227,11 +223,12 @@ pub fn check_file_against_editorconfig(contents: &[u8], properties: &Properties)
         return vec![];
     }
 
-    errors.extend_from_slice(&check_editorconfig_line_endings(
+    check_editorconfig_line_endings(
         &decoded_string,
         properties,
         true,
-    ));
+        &mut errors,
+    );
 
     // Extract properties once for all lines to amortize hashmap lookups
     let line_config = LineCheckConfig::from_properties(properties);
@@ -266,11 +263,12 @@ pub fn check_file_against_editorconfig(contents: &[u8], properties: &Properties)
             }
         }
 
-        errors.extend_from_slice(&check_editorconfig_properties_for_line(
+        check_editorconfig_properties_for_line(
             i + 1,
             line,
             &line_config,
-        ));
+            &mut errors,
+        );
     }
     errors
 }
@@ -308,7 +306,8 @@ mod test {
         properties.insert(IndentStyle::Spaces);
 
         let config = LineCheckConfig::from_properties(&properties);
-        let errors = check_editorconfig_properties_for_line(1, "    code", &config);
+        let mut errors = vec![];
+        check_editorconfig_properties_for_line(1, "    code", &config, &mut errors);
         assert!(errors.is_empty());
     }
 
@@ -320,10 +319,12 @@ mod test {
         properties.insert(IndentStyle::Spaces);
 
         let config = LineCheckConfig::from_properties(&properties);
-        let errors = check_editorconfig_properties_for_line(1, "    code", &config);
+        let mut errors = vec![];
+        check_editorconfig_properties_for_line(1, "    code", &config, &mut errors);
         assert!(errors.is_empty());
 
-        let errors = check_editorconfig_properties_for_line(1, "\tcode", &config);
+        let mut errors = vec![];
+        check_editorconfig_properties_for_line(1, "\tcode", &config, &mut errors);
         assert_eq!(errors.len(), 1);
         match &errors[0] {
             CheckError::WrongIndentStyle { expected, .. } => {
@@ -341,10 +342,12 @@ mod test {
         properties.insert(IndentStyle::Tabs);
 
         let config = LineCheckConfig::from_properties(&properties);
-        let errors = check_editorconfig_properties_for_line(1, "\tcode", &config);
+        let mut errors = vec![];
+        check_editorconfig_properties_for_line(1, "\tcode", &config, &mut errors);
         assert!(errors.is_empty());
 
-        let errors = check_editorconfig_properties_for_line(1, "    code", &config);
+        let mut errors = vec![];
+        check_editorconfig_properties_for_line(1, "    code", &config, &mut errors);
         assert_eq!(errors.len(), 1);
         match &errors[0] {
             CheckError::WrongIndentStyle { expected, .. } => {
@@ -361,7 +364,8 @@ mod test {
         properties.insert(IndentStyle::Spaces);
 
         let config = LineCheckConfig::from_properties(&properties);
-        let errors = check_editorconfig_properties_for_line(1, "code  ", &config);
+        let mut errors = vec![];
+        check_editorconfig_properties_for_line(1, "code  ", &config, &mut errors);
         assert_eq!(errors.len(), 1);
         match &errors[0] {
             CheckError::TrailingWhitespace { line } => {
@@ -370,7 +374,8 @@ mod test {
             _ => panic!("Expected TrailingWhitespace error"),
         }
 
-        let errors = check_editorconfig_properties_for_line(1, "code", &config);
+        let mut errors = vec![];
+        check_editorconfig_properties_for_line(1, "code", &config, &mut errors);
         assert!(
             errors
                 .iter()
@@ -385,14 +390,16 @@ mod test {
         properties.insert(IndentStyle::Spaces);
 
         let config = LineCheckConfig::from_properties(&properties);
-        let errors = check_editorconfig_properties_for_line(1, "short line", &config);
+        let mut errors = vec![];
+        check_editorconfig_properties_for_line(1, "short line", &config, &mut errors);
         assert!(
             errors
                 .iter()
                 .all(|e| !matches!(e, CheckError::LineTooLong { .. }))
         );
 
-        let errors = check_editorconfig_properties_for_line(1, "this is a very long line", &config);
+        let mut errors = vec![];
+        check_editorconfig_properties_for_line(1, "this is a very long line", &config, &mut errors);
         assert_eq!(
             errors
                 .iter()
@@ -423,10 +430,12 @@ mod test {
         properties.insert(EndOfLine::Lf);
         properties.insert(FinalNewline::Value(true));
 
-        let errors = check_editorconfig_line_endings("", &properties, true);
+        let mut errors = vec![];
+        check_editorconfig_line_endings("", &properties, true, &mut errors);
         assert!(errors.is_empty());
 
-        let errors = check_editorconfig_line_endings("", &properties, false);
+        let mut errors = vec![];
+        check_editorconfig_line_endings("", &properties, false, &mut errors);
         assert_eq!(errors.len(), 1);
         match &errors[0] {
             CheckError::MissingFinalNewline => (),
@@ -439,10 +448,12 @@ mod test {
         let mut properties = Properties::default();
         properties.insert(EndOfLine::Lf);
 
-        let errors = check_editorconfig_line_endings("line1\nline2\n", &properties, true);
+        let mut errors = vec![];
+        check_editorconfig_line_endings("line1\nline2\n", &properties, true, &mut errors);
         assert!(errors.is_empty());
 
-        let errors = check_editorconfig_line_endings("line1\r\nline2\r\n", &properties, true);
+        let mut errors = vec![];
+        check_editorconfig_line_endings("line1\r\nline2\r\n", &properties, true, &mut errors);
         assert_eq!(errors.len(), 1);
         match &errors[0] {
             CheckError::WrongLineEnding { expected } => {
@@ -457,10 +468,12 @@ mod test {
         let mut properties = Properties::default();
         properties.insert(EndOfLine::CrLf);
 
-        let errors = check_editorconfig_line_endings("line1\r\nline2\r\n", &properties, true);
+        let mut errors = vec![];
+        check_editorconfig_line_endings("line1\r\nline2\r\n", &properties, true, &mut errors);
         assert!(errors.is_empty());
 
-        let errors = check_editorconfig_line_endings("line1\nline2\n", &properties, true);
+        let mut errors = vec![];
+        check_editorconfig_line_endings("line1\nline2\n", &properties, true, &mut errors);
         assert_eq!(errors.len(), 1);
         match &errors[0] {
             CheckError::WrongLineEnding { expected } => {
@@ -475,10 +488,12 @@ mod test {
         let mut properties = Properties::default();
         properties.insert(EndOfLine::Cr);
 
-        let errors = check_editorconfig_line_endings("line1\rline2\r", &properties, true);
+        let mut errors = vec![];
+        check_editorconfig_line_endings("line1\rline2\r", &properties, true, &mut errors);
         assert!(errors.is_empty());
 
-        let errors = check_editorconfig_line_endings("line1\nline2\n", &properties, true);
+        let mut errors = vec![];
+        check_editorconfig_line_endings("line1\nline2\n", &properties, true, &mut errors);
         assert_eq!(errors.len(), 1);
     }
 
@@ -488,7 +503,8 @@ mod test {
         properties.insert(EndOfLine::Lf);
         properties.insert(FinalNewline::Value(true));
 
-        let errors = check_editorconfig_line_endings("line1\nline2\n", &properties, true);
+        let mut errors = vec![];
+        check_editorconfig_line_endings("line1\nline2\n", &properties, true, &mut errors);
         assert!(
             errors
                 .iter()
@@ -502,7 +518,8 @@ mod test {
         properties.insert(EndOfLine::Lf);
         properties.insert(FinalNewline::Value(true));
 
-        let errors = check_editorconfig_line_endings("line1\nline2", &properties, true);
+        let mut errors = vec![];
+        check_editorconfig_line_endings("line1\nline2", &properties, true, &mut errors);
         assert_eq!(
             errors
                 .iter()
