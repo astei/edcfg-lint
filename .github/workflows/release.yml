@@ -98,7 +98,7 @@ jobs:
         steps:
             - uses: actions/checkout@v4
             - name: Install Cross
-              if: runner.os == 'Linux' && matrix.target != ''
+              if: matrix.os == 'ubuntu-latest' && matrix.target != ''
               run: cargo install cross --tag v0.2.5 --git https://github.com/cross-rs/cross && echo "CARGO=cross" >> $GITHUB_ENV
 
             - name: Set target variables
@@ -151,5 +151,7 @@ jobs:
 
             - name: Upload the release
               shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
               run: |
                   gh release upload ${{ needs.create-release.outputs.version }} ${{ env.ASSET }} ${{ env.ASSET_SUM }}
