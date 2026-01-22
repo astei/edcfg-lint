@@ -75,9 +75,9 @@ jobs:
                     - os: ubuntu-24.04-arm
                       target: aarch64-unknown-linux-musl
 
-                    - os: ubuntu-24.04-arm
+                    - os: ubuntu-latest
                       target: armv7-unknown-linux-gnueabihf
-                    - os: ubuntu-24.04-arm
+                    - os: ubuntu-latest
                       target: armv7-unknown-linux-musleabihf
 
                     # macOS
