@@ -138,15 +138,13 @@ fn check_editorconfig_line_endings(
 
     let content_bytes = contents.as_bytes();
 
-    let desired_endings = memmem::find_iter(content_bytes, desired_le.as_bytes()).count();
-
     let crs = memchr_iter(b'\r', content_bytes).count();
     let lfs = memchr_iter(b'\n', content_bytes).count();
 
     let line_endings_match = match line_ending_mode {
-        EndOfLine::Cr => crs == desired_endings && lfs == 0,
-        EndOfLine::Lf => crs == 0 && lfs == desired_endings,
-        EndOfLine::CrLf => crs == desired_endings && lfs == desired_endings,
+        EndOfLine::Cr => lfs == 0,
+        EndOfLine::Lf => crs == 0,
+        EndOfLine::CrLf => crs == lfs,
     };
 
     if !line_endings_match {
@@ -223,12 +221,7 @@ pub fn check_file_against_editorconfig(contents: &[u8], properties: &Properties)
         return vec![];
     }
 
-    check_editorconfig_line_endings(
-        &decoded_string,
-        properties,
-        true,
-        &mut errors,
-    );
+    check_editorconfig_line_endings(&decoded_string, properties, true, &mut errors);
 
     // Extract properties once for all lines to amortize hashmap lookups
     let line_config = LineCheckConfig::from_properties(properties);
@@ -263,12 +256,7 @@ pub fn check_file_against_editorconfig(contents: &[u8], properties: &Properties)
             }
         }
 
-        check_editorconfig_properties_for_line(
-            i + 1,
-            line,
-            &line_config,
-            &mut errors,
-        );
+        check_editorconfig_properties_for_line(i + 1, line, &line_config, &mut errors);
     }
     errors
 }
@@ -810,7 +798,8 @@ mod test {
         properties.insert(TrimTrailingWs::Value(true));
 
         // Lines between eddy-off and eddy-on should be skipped
-        let content = b"good line\n// eddy-off\n\tbad line 1  \n\tbad line 2  \n// eddy-on\ngood line\n";
+        let content =
+            b"good line\n// eddy-off\n\tbad line 1  \n\tbad line 2  \n// eddy-on\ngood line\n";
         let errors = check_file_against_editorconfig(content, &properties);
         assert!(
             errors.is_empty(),
@@ -851,11 +840,17 @@ mod test {
         // eddy-disable-line in different comment styles
         let content_c_style = b"\tbad indent /* eddy-disable-line */\n";
         let errors = check_file_against_editorconfig(content_c_style, &properties);
-        assert!(errors.is_empty(), "eddy-disable-line should work in C-style comments");
+        assert!(
+            errors.is_empty(),
+            "eddy-disable-line should work in C-style comments"
+        );
 
         let content_hash = b"\tbad indent # eddy-disable-line\n";
         let errors = check_file_against_editorconfig(content_hash, &properties);
-        assert!(errors.is_empty(), "eddy-disable-line should work with hash comments");
+        assert!(
+            errors.is_empty(),
+            "eddy-disable-line should work with hash comments"
+        );
     }
 
     #[test]
@@ -865,7 +860,8 @@ mod test {
         properties.insert(TrimTrailingWs::Value(true));
 
         // Multiple eddy-off/eddy-on blocks
-        let content = b"good\n// eddy-off\n\tbad\n// eddy-on\ngood\n// eddy-off\n\tbad\n// eddy-on\ngood\n";
+        let content =
+            b"good\n// eddy-off\n\tbad\n// eddy-on\ngood\n// eddy-off\n\tbad\n// eddy-on\ngood\n";
         let errors = check_file_against_editorconfig(content, &properties);
         assert!(
             errors.is_empty(),
