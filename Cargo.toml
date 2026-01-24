@@ -32,3 +32,7 @@ lto = "fat"
 panic = "abort"
 incremental = false
 codegen-units = 1
+
+[tool.maturin]
+profile = "release-lto"
+editable-profile = "release"
