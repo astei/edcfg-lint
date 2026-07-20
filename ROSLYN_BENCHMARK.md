@@ -278,6 +278,44 @@ mean was approximately 3.15× its 7.790-second Mac mean. Consequently,
 `edcfg-lint`'s relative wall-time advantage increased from 8.6× on the Mac to
 12.8× on the droplet.
 
+## Asahi Linux corrected-optimization result
+
+The Roslyn corpus was also used for the six-stage corrected-optimization
+experiment documented in [`HOME_ASSISTANT_BENCHMARK.md`](HOME_ASSISTANT_BENCHMARK.md).
+This is distinct from the reference profiles, thread-scaling series, and
+optional `editorconfig-checker` comparison above; those additional suites were
+not repeated during this run.
+
+The run used the same M1 Max as the macOS reference machine, booted natively
+into Fedora Linux Asahi Remix 44 with kernel
+`7.0.13-400.asahi.fc44.aarch64+16k`. All ten cores were online, 62 GiB of
+memory was visible, and the pinned corpus was stored on Btrfs with zstd
+compression on the internal Apple AP4096R SSD/NVMe. Rust 1.97.1, Hyperfine
+1.20.0, the `release-lto` profile, three warmups, and 20 measured runs per
+command were used. The measurements were warm-cache runs in the normal desktop
+environment without dedicated CPU isolation.
+
+All C0–C5 executables exited with status 1, reported 31,830 checked files and
+12,125 failed files, and produced the expected full-output SHA-256
+`a71ac50c646b6e6f3215705e6fc703b3777583861b6f988ff396b510059b5481`.
+
+| Stage | Mean ± standard deviation | Median | Range | User CPU | System CPU | Incremental speedup | Overall speedup |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| C0: corrected baseline | 7.319 ± 0.022 s | 7.315 s | 7.288–7.359 s | 6.826 s | 428.3 ms | 1.00× | 1.00× |
+| C1: parallel | 887.1 ± 12.5 ms | 882.8 ms | 871.8–913.4 ms | 7.890 s | 560.9 ms | **8.25×** | 8.25× |
+| C2: binary handling | 876.3 ± 11.6 ms | 875.9 ms | 857.6–910.0 ms | 7.880 s | 503.7 ms | 1.01× | 8.35× |
+| C3: resolver cache | 630.1 ± 9.1 ms | 627.7 ms | 620.1–662.1 ms | 5.668 s | 224.3 ms | **1.39×** | 11.61× |
+| C4: property amortization | 314.4 ± 6.3 ms | 315.0 ms | 306.6–331.7 ms | 2.670 s | 221.5 ms | **2.00×** | **23.28×** |
+
+The untouched C5 control averaged 320.1 ± 9.4 ms with a 317.8 ms median and
+307.9–339.4 ms range. Its median was 0.9% slower than C4, supporting the same
+no-material-perturbation conclusion as the other machines.
+
+The raw six-command Hyperfine export is retained at
+[`benchmark-results/2026-07-20/corrected-optimization/asahi-linux/roslyn.json`](benchmark-results/2026-07-20/corrected-optimization/asahi-linux/roslyn.json),
+with SHA-256
+`7bc12479a242c4f0654dfe72df68a60b38db1818ab582ac90c228135c644cd9e`.
+
 ## Reproducing the benchmark
 
 ### 1. Build edcfg-lint

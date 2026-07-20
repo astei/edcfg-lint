@@ -26,12 +26,17 @@ behavior for:
 | M1 Max, macOS | Roslyn | 8.418 s | 859.4 ms | **9.80×** |
 | Xeon, Linux | Home Assistant | 2.787 s | 458.2 ms | **6.08×** |
 | Xeon, Linux | Roslyn | 12.037 s | 1.964 s | **6.13×** |
+| M1 Max, Asahi Linux | Home Assistant | 1.603 s | 89.1 ms | **17.99×** |
+| M1 Max, Asahi Linux | Roslyn | 7.319 s | 314.4 ms | **23.28×** |
 
 On the M1 Max, the fully optimized build checked approximately 41,800 Home
 Assistant files or 37,000 Roslyn files per wall-clock second. The Linux droplet
-processed approximately 50,500 and 16,200 files per second respectively.
+processed approximately 50,500 and 16,200 files per second respectively. Under
+Asahi Linux, the M1 Max processed approximately 260,000 and 101,200 files per
+second respectively.
 
-Parallel traversal was the largest optimization on both corpora and machines.
+Parallel traversal was the largest optimization on both corpora in all three
+environments.
 Removing the legacy MIME-probe cost and caching correctly resolved EditorConfig
 files also produced material improvements. On macOS, fetching line-check
 properties once per file halved user CPU on Home Assistant without changing
@@ -417,13 +422,13 @@ as the literal untouched result.
 
 ### Cross-platform comparison
 
-| Optimization | M1 Home Assistant | Linux Home Assistant | M1 Roslyn | Linux Roslyn |
-|---|---:|---:|---:|---:|
-| Parallel traversal | 2.88× | 2.31× | 4.91× | 2.52× |
-| Remove MIME probe | 1.24× | 1.08× | 1.12× | 1.04× |
-| Resolver cache | 1.35× | 1.22× | 1.50× | 1.47× |
-| Property amortization | 1.00× | 2.00× | 1.19× | 1.59× |
-| Overall | **4.81×** | **6.08×** | **9.80×** | **6.13×** |
+| Optimization | macOS Home Assistant | DO Linux Home Assistant | Asahi Home Assistant | macOS Roslyn | DO Linux Roslyn | Asahi Roslyn |
+|---|---:|---:|---:|---:|---:|---:|
+| Parallel traversal | 2.88× | 2.31× | 7.54× | 4.91× | 2.52× | 8.25× |
+| Remove MIME probe | 1.24× | 1.08× | 1.04× | 1.12× | 1.04× | 1.01× |
+| Resolver cache | 1.35× | 1.22× | 1.15× | 1.50× | 1.47× | 1.39× |
+| Property amortization | 1.00× | 2.00× | 1.98× | 1.19× | 1.59× | 2.00× |
+| Overall | **4.81×** | **6.08×** | **17.99×** | **9.80×** | **6.13×** | **23.28×** |
 
 The M1 Max and Xeon were close on the Home Assistant serial baseline: 2.661
 versus 2.787 seconds. The M1 then led through C1, C2, and C3 because its ten
@@ -450,6 +455,92 @@ where the corpus and OS place the bottleneck. Property amortization can be
 invisible on an APFS-dominated workload, decisive on Linux, and still useful
 but less dominant on a CPU-heavier macOS corpus.
 
+## Asahi Linux result
+
+The complete C0–C5 experiment was also run natively on the same M1 Max under
+Asahi Linux. The source, feature combinations, corpus commits, Home Assistant
+fixture, correctness protocol, three warmups, and 20 measured runs per command
+matched the macOS and DigitalOcean experiments. The final measurements used
+the internal SSD-backed Btrfs filesystem; a preliminary `/tmp` run was
+discarded after identifying that `/tmp` was RAM-backed `tmpfs` on this system.
+
+### Asahi environment
+
+- Date: 2026-07-20
+- Model: 16-inch MacBook Pro (`MacBookPro18,2`)
+- CPU: Apple M1 Max
+- CPU topology: 10 physical/logical cores (8 performance, 2 efficiency)
+- Memory: 64 GB installed; 62 GiB visible to the OS; 8 GiB zram swap
+- OS: Fedora Linux Asahi Remix 44, KDE Plasma Desktop Edition
+- Kernel: Linux 7.0.13-400.asahi.fc44.aarch64+16k
+- Architecture: aarch64, 16 KiB pages
+- Filesystem/storage: Btrfs with zstd compression on the internal Apple
+  AP4096R SSD/NVMe
+- Rust: `rustc 1.97.1 (8bab26f4f 2026-07-14)`
+- Cargo: 1.97.1
+- Hyperfine: 1.20.0
+- Cargo profile: `release-lto`
+- CPU frequency boost: reported disabled by `lscpu`
+
+The measurements were warm-cache runs in the normal desktop environment;
+there was no dedicated CPU isolation or background-load control.
+
+### Asahi behavioral equivalence
+
+All six executables exited with status 1 and produced the same complete-output
+hashes as the macOS and DigitalOcean runs:
+
+| Corpus | Full-output SHA-256 shared by C0–C5 |
+|---|---|
+| Home Assistant | `b34018d5034a5c3b197cb6a1e2569d653fb574c0abbd4950d5a02784585ede3a` |
+| Roslyn | `a71ac50c646b6e6f3215705e6fc703b3777583861b6f988ff396b510059b5481` |
+
+The fixture hash was
+`0c5016a64ff884872deb03d58e7f730dc8783cddc7d225638cd9f3a0c9d86e06`,
+and the checked/failed counts remained 23,138/53 and 31,830/12,125.
+
+### Asahi Home Assistant results
+
+| Stage | Mean ± standard deviation | Median | Range | User CPU | System CPU | Incremental speedup | Overall speedup |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| C0: corrected baseline | 1.603 ± 0.002 s | 1.604 s | 1.599–1.610 s | 1.354 s | 0.238 s | 1.00× | 1.00× |
+| C1: parallel | 212.5 ± 9.9 ms | 208.9 ms | 203.3–238.5 ms | 1.632 s | 385.5 ms | **7.54×** | 7.54× |
+| C2: binary handling | 204.2 ± 4.7 ms | 203.4 ms | 198.3–214.2 ms | 1.562 s | 305.3 ms | 1.04× | 7.85× |
+| C3: resolver cache | 176.9 ± 4.0 ms | 176.3 ms | 172.4–188.7 ms | 1.479 s | 139.2 ms | **1.15×** | 9.07× |
+| C4: property amortization | 89.1 ± 7.1 ms | 86.5 ms | 78.6–103.5 ms | 611.7 ms | 152.8 ms | **1.98×** | **17.99×** |
+
+Parallel traversal was unusually effective on this native ten-core Linux
+system, reducing wall time by approximately 87%. Property amortization again
+made its CPU saving directly visible in wall time: user CPU fell by about
+2.42× from C3 to C4, while mean wall time improved by 1.98×.
+
+### Asahi Roslyn results
+
+| Stage | Mean ± standard deviation | Median | Range | User CPU | System CPU | Incremental speedup | Overall speedup |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| C0: corrected baseline | 7.319 ± 0.022 s | 7.315 s | 7.288–7.359 s | 6.826 s | 428.3 ms | 1.00× | 1.00× |
+| C1: parallel | 887.1 ± 12.5 ms | 882.8 ms | 871.8–913.4 ms | 7.890 s | 560.9 ms | **8.25×** | 8.25× |
+| C2: binary handling | 876.3 ± 11.6 ms | 875.9 ms | 857.6–910.0 ms | 7.880 s | 503.7 ms | 1.01× | 8.35× |
+| C3: resolver cache | 630.1 ± 9.1 ms | 627.7 ms | 620.1–662.1 ms | 5.668 s | 224.3 ms | **1.39×** | 11.61× |
+| C4: property amortization | 314.4 ± 6.3 ms | 315.0 ms | 306.6–331.7 ms | 2.670 s | 221.5 ms | **2.00×** | **23.28×** |
+
+Roslyn showed the same broad shape. Parallel traversal produced an 8.25×
+first-step speedup, removing the MIME probe was effectively neutral, resolver
+caching improved wall time by 1.39×, and property amortization halved it
+again. The optimized build processed approximately 101,200 checked files per
+wall-clock second.
+
+### Asahi untouched-current control
+
+| Corpus | C4 mean / median | C5 mean / median | Median difference |
+|---|---:|---:|---:|
+| Home Assistant | 89.1 / 86.5 ms | 85.7 / 84.8 ms | C5 2.0% faster |
+| Roslyn | 314.4 / 315.0 ms | 320.1 / 317.8 ms | C5 0.9% slower |
+
+The small C4/C5 differences, together with exact output equivalence, support
+the conclusion that the benchmark feature framework did not materially
+perturb the optimized result on Asahi Linux.
+
 ## Binary SHA-256 values
 
 ### M1 Max binaries
@@ -473,6 +564,17 @@ but less dominant on a CPU-heavier macOS corpus.
 | C3 | `2914a1deaeacc49cd9d5d8899ecdfc7171495b3c43f0da92274856a311d426ac` |
 | C4 | `9e161feee3f227fec3f7205aea54cd9f6db8c7e6d21658d7ab6a0a4d2def7b5a` |
 | C5 | `7922369c717e173a9b561b26ade2d08f0ce2e2832309686506269914eb588223` |
+
+### Asahi Linux binaries
+
+| Executable | SHA-256 |
+|---|---|
+| C0 | `83534b14ce227caa16c6c69a061bb223b936e457354ddb7acddf81d14f202a91` |
+| C1 | `639c599edf18e9abada3e2d65487a1e53aa27ce6620b3c765b8a85b09fa4f2c1` |
+| C2 | `8d9bc95f7d7526f1766b757d9a61d6a8508f7cde44ead5d6ee040c1c8aa11d06` |
+| C3 | `e70da628cf91c5b443537ce1f9009a0e550c1f06d55dc508e5552137e53d5add` |
+| C4 | `f621e57c18a073528d1c3bef044b90ea540ccc0e7ba01dd426b2226a228ebab3` |
+| C5 | `b8b8aa2ef7c837f551edddded263aa8edd7090f1af300bfee33bca83b9f50d2b` |
 
 ## Reproducing the variants
 
@@ -537,9 +639,10 @@ and any background activity or power-mode constraints.
 ## Raw timing data
 
 Canonical copies of the raw Hyperfine JSON are retained in
-`benchmark-results/2026-07-20/corrected-optimization`, separated into `macos`
-and `linux` directories. The original temporary copies may still exist under
-`/tmp/eddy-corrected-benchmark`, but are not required to preserve the results.
+`benchmark-results/2026-07-20/corrected-optimization`, separated into `macos`,
+`linux`, and `asahi-linux` directories. The original temporary copies may
+still exist under `/tmp/eddy-corrected-benchmark`, but are not required to
+preserve the results.
 
 | File | SHA-256 |
 |---|---|
@@ -550,6 +653,8 @@ and `linux` directories. The original temporary copies may still exist under
 | `untouched-roslyn.json` | `2548cb81a80fdfe57f65bb8d9fa0d3fd099a329484b39de8eb2c310625805b50` |
 | `linux-home-assistant.json` | `c9832186d02c2a4f3cc6851f83cd5d3822f1eb6b8dd76473e6f039d467602c20` |
 | `linux-roslyn.json` | `939d667fee62f15c391ce0120c5e0343c0eb9c39970afef4613abea3c587efa4` |
+| `asahi-linux/home-assistant.json` | `656b66500353959bdb250701ff119f017f14f48e728fea84f4c1459bad8f15bb` |
+| `asahi-linux/roslyn.json` | `7bc12479a242c4f0654dfe72df68a60b38db1818ab582ac90c228135c644cd9e` |
 
 The first untouched-Home-Assistant checksum above is intentionally included
 for completeness despite its outlier-heavy mean.
@@ -569,7 +674,8 @@ without relying on the original versions' changing behavior:
    and overall speedup factors.
 
 The exact overall factor is therefore not a universal property of the program.
-It ranged from 4.81× to 9.80× on the M1 Max and from 6.08× to 6.13× on the Linux
-droplet. The robust claim is that all four optimizations remain justified after
-correctness is held constant, while their relative importance depends strongly
-on the repository, operating system, and available parallel capacity.
+Across the three environments it ranged from 4.81× to 17.99× for Home Assistant
+and from 6.13× to 23.28× for Roslyn. The robust claim is that all four
+optimizations remain justified after correctness is held constant, while their
+relative importance depends strongly on the repository, operating system, and
+available parallel capacity.
