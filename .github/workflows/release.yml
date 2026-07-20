@@ -199,7 +199,7 @@ jobs:
               shell: bash
               run: |
                   # jemalloc is not portable and aarch64 systems tend to have larger page sizes
-                  if [ "$(uname -p)" = "aarch64" ]; then echo "JEMALLOC_SYS_WITH_LG_PAGE=16" >> $GITHUB_ENV"
+                  if [ "$(uname -p)" = "aarch64" ]; then echo "JEMALLOC_SYS_WITH_LG_PAGE=16" >> $GITHUB_ENV; fi
             - name: Build wheels
               uses: PyO3/maturin-action@v1
               with:

@@ -21,19 +21,14 @@ use human_units::Size;
 // musl is a minimal C standard library implementation. As such, it lacks the depth and
 // complexity of other system C libraries. Unfortunately, one of the most important things
 // it lacks is a fast memory allocator. When linting a large codebase, the default allocator
-// has particularly poor performance. Using jemalloc and gets musl's performance *much* more
+// has particularly poor performance. Using mimalloc and gets musl's performance *much* more
 // competitive with that of glibc.
-//
-// Performance of using jemalloc is otherwise all over the place. I found results such as
-// "20% speedup" (on my M1 Max running Asahi Linux), "22% slower" (on a lower-end VPS with
-// shared Broadwell cores), and "no difference" (on a high-end VPS with dedicated Ice Lake
-// cores). Thus, I find it prudent just to only enable it when targeting musl.
 #[cfg(target_env = "musl")]
-use tikv_jemallocator::Jemalloc;
+use mimalloc::MiMalloc;
 
 #[cfg(target_env = "musl")]
 #[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
+static GLOBAL: MiMalloc = MiMalloc;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
