@@ -3,7 +3,8 @@ use crate::error::{CheckError, CheckResult};
 use ec4rs::{
     Properties,
     property::{
-        Charset, EndOfLine, FinalNewline, IndentStyle, MaxLineLen, TabWidth, TrimTrailingWs,
+        Charset, EndOfLine, FinalNewline, IndentSize, IndentStyle, MaxLineLen, TabWidth,
+        TrimTrailingWs,
     },
 };
 use memchr::memchr_iter;
@@ -38,25 +39,48 @@ fn line_space_width(line: &str, tab_width: usize) -> usize {
 /// Extracted EditorConfig properties that are checked per-line.
 /// This allows us to amortize the property lookups across all lines in a file.
 struct LineCheckConfig {
-    tab_width: usize,
-    indent_style: IndentStyle,
-    trim_trailing_ws: bool,
+    tab_width: Option<usize>,
+    indent_style: Option<IndentStyle>,
+    trim_trailing_ws: Option<bool>,
     max_line_len: Option<usize>,
 }
 
 impl LineCheckConfig {
     fn from_properties(properties: &Properties) -> Self {
-        let TabWidth::Value(tab_width) = properties.get::<TabWidth>().unwrap_or(TabWidth::Value(4));
-        let indent_style = properties
-            .get::<IndentStyle>()
-            .unwrap_or(IndentStyle::Spaces);
-        let TrimTrailingWs::Value(trim_trailing_ws) = properties
+        let raw_tab_width = properties.get::<TabWidth>().ok().and_then(|res| match res {
+            TabWidth::Value(0) => None,
+            TabWidth::Value(val) => Some(val),
+        });
+
+        // There is one invalid case here: suppose `indent_size = tab` and `tab_width` is unset(!)
+        // we'll handle it for now by treating as "don't check it at all", but perhaps it's worth
+        // emitting an error.
+        let indent_width = properties
+            .get::<IndentSize>()
+            .ok()
+            .and_then(|res| match res {
+                IndentSize::Value(0) => None,
+                IndentSize::Value(val) => Some(val),
+                IndentSize::UseTabWidth => raw_tab_width,
+            });
+
+        // Tab width defaults to `indent_size` if tab width isn't specified but indent_size is.
+        let tab_width = raw_tab_width.or(indent_width);
+
+        let indent_style = properties.get::<IndentStyle>().ok();
+        let trim_trailing_ws = properties
             .get::<TrimTrailingWs>()
-            .unwrap_or(TrimTrailingWs::Value(true));
-        let max_line_len = match properties.get::<MaxLineLen>().unwrap_or(MaxLineLen::Off) {
-            MaxLineLen::Value(len) => Some(len),
-            MaxLineLen::Off => None,
-        };
+            .ok()
+            .map(|res| match res {
+                TrimTrailingWs::Value(val) => val,
+            });
+        let max_line_len = properties
+            .get::<MaxLineLen>()
+            .ok()
+            .and_then(|res| match res {
+                MaxLineLen::Value(len) => Some(len),
+                MaxLineLen::Off => None,
+            });
 
         LineCheckConfig {
             tab_width,
@@ -73,35 +97,52 @@ fn check_editorconfig_properties_for_line(
     config: &LineCheckConfig,
     errors: &mut CheckResult,
 ) {
-    let cur_line_width = line_space_width(cur_line, config.tab_width);
+    if let Some(indent_style) = config.indent_style {
+        let leading_whitespace_or_tabs_str = first_non_whitespace_or_tab_pos(cur_line)
+            .map(|pos| &cur_line[0..pos])
+            .unwrap_or(cur_line);
+        let spaces = memchr_iter(b' ', leading_whitespace_or_tabs_str.as_bytes()).count();
+        let tabs = memchr_iter(b'\t', leading_whitespace_or_tabs_str.as_bytes()).count();
 
-    // check indentation style
-    let leading_whitespace_or_tabs_str = first_non_whitespace_or_tab_pos(cur_line)
-        .map(|pos| &cur_line[0..pos])
-        .unwrap_or(cur_line);
-    let spaces = memchr_iter(b' ', leading_whitespace_or_tabs_str.as_bytes()).count();
-    let tabs = memchr_iter(b'\t', leading_whitespace_or_tabs_str.as_bytes()).count();
+        if let Some(tab_width) = config.tab_width {
+            let cur_line_width: usize = line_space_width(cur_line, tab_width);
 
-    let (desired_tabs, desired_spaces) = match config.indent_style {
-        IndentStyle::Spaces => (0, cur_line_width),
-        IndentStyle::Tabs => (
-            cur_line_width.div_euclid(config.tab_width),
-            cur_line_width.rem_euclid(config.tab_width),
-        ),
-    };
+            // check indentation style
+            let (desired_tabs, desired_spaces) = match indent_style {
+                IndentStyle::Spaces => (0, cur_line_width),
+                IndentStyle::Tabs => (
+                    cur_line_width.div_euclid(tab_width),
+                    cur_line_width.rem_euclid(tab_width),
+                ),
+            };
 
-    if desired_tabs != tabs || spaces != desired_spaces {
-        errors.push(CheckError::WrongIndentStyle {
-            line: cur_line_num,
-            expected: config.indent_style,
-            expected_tabs: desired_tabs,
-            expected_spaces: desired_spaces,
-            actual_spaces: spaces,
-            actual_tabs: tabs,
-        });
+            if desired_tabs != tabs || spaces != desired_spaces {
+                errors.push(CheckError::WrongIndentStyle {
+                    line: cur_line_num,
+                    expected: indent_style,
+                    expected_tabs: desired_tabs,
+                    expected_spaces: desired_spaces,
+                    actual_spaces: spaces,
+                    actual_tabs: tabs,
+                });
+            }
+        } else {
+            let (desired_tabs, desired_spaces) = match indent_style {
+                IndentStyle::Spaces => (0, spaces),
+                IndentStyle::Tabs => (tabs, 0),
+            };
+            if desired_tabs != tabs || spaces != desired_spaces {
+                errors.push(CheckError::WrongIndentStyleBasic {
+                    line: cur_line_num,
+                    expected: indent_style,
+                    actual_spaces: spaces,
+                    actual_tabs: tabs,
+                });
+            }
+        }
     }
 
-    if config.trim_trailing_ws
+    if config.trim_trailing_ws.is_some_and(|val| val)
         && let Some(last_char) = cur_line.chars().next_back()
         && (last_char == ' ' || last_char == '\t')
     {
@@ -129,7 +170,12 @@ fn check_editorconfig_line_endings(
     if empty_file_passes && contents.is_empty() {
         return;
     }
-    let line_ending_mode = properties.get::<EndOfLine>().unwrap_or(EndOfLine::Lf);
+
+    if properties.get::<EndOfLine>().is_err() {
+        return;
+    }
+
+    let line_ending_mode = properties.get::<EndOfLine>().unwrap();
     let desired_le = match line_ending_mode {
         EndOfLine::Cr => "\r",
         EndOfLine::Lf => "\n",
@@ -138,13 +184,14 @@ fn check_editorconfig_line_endings(
 
     let content_bytes = contents.as_bytes();
 
+    let crlfs = memmem::find_iter(content_bytes, b"\r\n").count();
     let crs = memchr_iter(b'\r', content_bytes).count();
     let lfs = memchr_iter(b'\n', content_bytes).count();
 
     let line_endings_match = match line_ending_mode {
         EndOfLine::Cr => lfs == 0,
         EndOfLine::Lf => crs == 0,
-        EndOfLine::CrLf => crs == lfs,
+        EndOfLine::CrLf => crs == crlfs && lfs == crlfs,
     };
 
     if !line_endings_match {
@@ -346,6 +393,57 @@ mod test {
     }
 
     #[test]
+    fn test_check_indent_style_without_a_width() {
+        let mut spaces_properties = Properties::default();
+        spaces_properties.insert(IndentStyle::Spaces);
+        let spaces_config = LineCheckConfig::from_properties(&spaces_properties);
+        let mut spaces_errors = vec![];
+        check_editorconfig_properties_for_line(1, "\tcode", &spaces_config, &mut spaces_errors);
+        assert!(matches!(
+            spaces_errors.as_slice(),
+            [CheckError::WrongIndentStyleBasic {
+                expected: IndentStyle::Spaces,
+                ..
+            }]
+        ));
+
+        let mut tabs_properties = Properties::default();
+        tabs_properties.insert(IndentStyle::Tabs);
+        let tabs_config = LineCheckConfig::from_properties(&tabs_properties);
+        let mut tabs_errors = vec![];
+        check_editorconfig_properties_for_line(1, "    code", &tabs_config, &mut tabs_errors);
+        assert!(matches!(
+            tabs_errors.as_slice(),
+            [CheckError::WrongIndentStyleBasic {
+                expected: IndentStyle::Tabs,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn test_indent_size_is_only_a_fallback_for_tab_width() {
+        let mut properties = Properties::default();
+        properties.insert(IndentSize::Value(4));
+        properties.insert(IndentStyle::Tabs);
+        let config = LineCheckConfig::from_properties(&properties);
+
+        let mut valid_errors = vec![];
+        check_editorconfig_properties_for_line(1, "\tcode", &config, &mut valid_errors);
+        assert!(valid_errors.is_empty());
+
+        let mut invalid_errors = vec![];
+        check_editorconfig_properties_for_line(1, "    code", &config, &mut invalid_errors);
+        assert!(matches!(
+            invalid_errors.as_slice(),
+            [CheckError::WrongIndentStyle {
+                expected: IndentStyle::Tabs,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
     fn test_check_trailing_whitespace() {
         let mut properties = Properties::default();
         properties.insert(TrimTrailingWs::Value(true));
@@ -462,6 +560,16 @@ mod test {
 
         let mut errors = vec![];
         check_editorconfig_line_endings("line1\nline2\n", &properties, true, &mut errors);
+        assert_eq!(errors.len(), 1);
+        match &errors[0] {
+            CheckError::WrongLineEnding { expected } => {
+                assert_eq!(expected, "\\u{d}\\u{a}");
+            }
+            _ => panic!("Expected WrongLineEnding error"),
+        }
+
+        let mut errors = vec![];
+        check_editorconfig_line_endings("line1\n\rline2\n\r", &properties, true, &mut errors);
         assert_eq!(errors.len(), 1);
         match &errors[0] {
             CheckError::WrongLineEnding { expected } => {
@@ -692,6 +800,7 @@ mod test {
     fn test_skip_file_directive() {
         let mut properties = Properties::default();
         properties.insert(IndentStyle::Spaces);
+        properties.insert(IndentSize::Value(4));
         properties.insert(TrimTrailingWs::Value(true));
 
         // File with edcfg-lint-disable-file on first line should skip all checks
@@ -715,6 +824,7 @@ mod test {
     fn test_skip_file_directive_must_be_first_line() {
         let mut properties = Properties::default();
         properties.insert(IndentStyle::Spaces);
+        properties.insert(IndentSize::Value(4));
         properties.insert(TrimTrailingWs::Value(true));
 
         // edcfg-lint-disable-file on second line should NOT skip the file
@@ -730,6 +840,7 @@ mod test {
     fn test_skip_this_line_directive() {
         let mut properties = Properties::default();
         properties.insert(IndentStyle::Spaces);
+        properties.insert(IndentSize::Value(4));
         properties.insert(TrimTrailingWs::Value(true));
 
         // Line with edcfg-lint-disable-line should be skipped
@@ -755,6 +866,7 @@ mod test {
     fn test_skip_next_line_directive() {
         let mut properties = Properties::default();
         properties.insert(IndentStyle::Spaces);
+        properties.insert(IndentSize::Value(4));
         properties.insert(TrimTrailingWs::Value(true));
 
         // Line after edcfg-lint-disable-next-line should be skipped
@@ -778,6 +890,7 @@ mod test {
     fn test_skip_next_line_only_skips_one_line() {
         let mut properties = Properties::default();
         properties.insert(IndentStyle::Spaces);
+        properties.insert(IndentSize::Value(4));
         properties.insert(TrimTrailingWs::Value(true));
 
         // edcfg-lint-disable-next-line should only skip the immediately following line
@@ -795,6 +908,7 @@ mod test {
     fn test_skip_block_directive() {
         let mut properties = Properties::default();
         properties.insert(IndentStyle::Spaces);
+        properties.insert(IndentSize::Value(4));
         properties.insert(TrimTrailingWs::Value(true));
 
         // Lines between edcfg-lint-off and edcfg-lint-on should be skipped
@@ -820,6 +934,7 @@ mod test {
     fn test_skip_block_without_enable() {
         let mut properties = Properties::default();
         properties.insert(IndentStyle::Spaces);
+        properties.insert(IndentSize::Value(4));
         properties.insert(TrimTrailingWs::Value(true));
 
         // edcfg-lint-off without edcfg-lint-on should skip all remaining lines
@@ -835,6 +950,7 @@ mod test {
     fn test_skip_directives_in_various_comment_styles() {
         let mut properties = Properties::default();
         properties.insert(IndentStyle::Spaces);
+        properties.insert(IndentSize::Value(4));
         properties.insert(TrimTrailingWs::Value(true));
 
         // edcfg-lint-disable-line in different comment styles
@@ -857,6 +973,7 @@ mod test {
     fn test_multiple_skip_blocks() {
         let mut properties = Properties::default();
         properties.insert(IndentStyle::Spaces);
+        properties.insert(IndentSize::Value(4));
         properties.insert(TrimTrailingWs::Value(true));
 
         // Multiple edcfg-lint-off/edcfg-lint-on blocks

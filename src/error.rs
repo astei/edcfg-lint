@@ -2,6 +2,12 @@ use ec4rs::property::{Charset, IndentStyle};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CheckError {
+    WrongIndentStyleBasic {
+        line: usize,
+        expected: IndentStyle,
+        actual_tabs: usize,
+        actual_spaces: usize,
+    },
     WrongIndentStyle {
         line: usize,
         expected: IndentStyle,
@@ -30,11 +36,22 @@ pub enum CheckError {
         charset: Charset,
     },
     IOError,
+    Skipped,
 }
 
 impl std::fmt::Display for CheckError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            CheckError::WrongIndentStyleBasic {
+                line,
+                expected,
+                actual_tabs,
+                actual_spaces,
+            } => write!(
+                f,
+                "line {}: wrong indent style (expected {:?}: got {} tabs, {} spaces)",
+                line, expected, actual_tabs, actual_spaces
+            ),
             CheckError::WrongIndentStyle {
                 line,
                 expected,
@@ -82,6 +99,7 @@ impl std::fmt::Display for CheckError {
             CheckError::IOError => {
                 write!(f, "unable to open or read file")
             }
+            CheckError::Skipped => Ok(()),
         }
     }
 }

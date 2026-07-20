@@ -38,13 +38,17 @@ static GLOBAL: Jemalloc = Jemalloc;
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    /// Don't emit specific errors, instead emit the total number of errors.
+    /// Rmit only the total number of files with errors.
     #[arg(short, long)]
     count: bool,
 
     /// How many threads to use. By default, uses all cores.
     #[arg(short, long, default_value = "0")]
     jobs: usize,
+
+    /// Examine "hidden" directories as well.
+    #[arg(long, default_value = "false")]
+    hidden: bool,
 
     /// Files to exclude.
     #[arg(long)]
@@ -95,6 +99,8 @@ fn main() {
         walk_builder.threads(args.jobs);
     }
 
+    walk_builder.hidden(!args.hidden);
+
     let max_file_size = match args.max_file_size {
         Size(0) => None,
         size => usize::try_from(size.0).ok(),
@@ -134,10 +140,15 @@ fn main() {
     let mut files_with_errors = vec![];
 
     for (file_path, result) in receiver {
-        if let Err(errors) = result {
-            files_with_errors.push((file_path, errors));
+        match result {
+            Ok(()) => total_files += 1,
+            Err(errors) => {
+                if errors.as_slice() != [error::CheckError::Skipped] {
+                    files_with_errors.push((file_path, errors));
+                    total_files += 1;
+                }
+            }
         }
-        total_files += 1;
     }
 
     let mut stdout = StandardStream::stdout(ColorChoice::Auto);
@@ -181,7 +192,7 @@ fn check_file(path: &Path, max_file_size: Option<usize>) -> Result<(), Vec<error
         .map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX))
         .ok();
     if max_file_size.is_some_and(|mfs| size.is_some_and(|file_size| file_size > mfs)) {
-        return Ok(());
+        return Err(vec![error::CheckError::Skipped]);
     }
 
     let mut content = Vec::with_capacity(size.unwrap_or(8000));
@@ -191,8 +202,9 @@ fn check_file(path: &Path, max_file_size: Option<usize>) -> Result<(), Vec<error
     };
 
     // skip over potential binary files
-    if memchr(b'\0', &content[..content.len().min(8000)]).is_some() {
-        return Ok(());
+    let has_unicode_bom = encoding_rs::Encoding::for_bom(&content).is_some();
+    if !has_unicode_bom && memchr(b'\0', &content[..content.len().min(8000)]).is_some() {
+        return Err(vec![error::CheckError::Skipped]);
     }
 
     let properties = ec::properties_of_cached(path).map_err(|_| vec![])?;
@@ -203,5 +215,120 @@ fn check_file(path: &Path, max_file_size: Option<usize>) -> Result<(), Vec<error
         Ok(())
     } else {
         Err(errors)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::CheckError;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEMP_DIR_ID: AtomicU64 = AtomicU64::new(0);
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(test_name: &str) -> Self {
+            let id = NEXT_TEMP_DIR_ID.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "edcfg-lint-harness-{test_name}-{}-{id}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write(path: impl AsRef<Path>, contents: &[u8]) {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn bom_marked_utf16_files_are_checked_instead_of_skipped_as_binary() {
+        for (name, charset, contents) in [
+            (
+                "utf16le.txt",
+                "utf-16le",
+                b"\xff\xfeB\x00a\x00d\x00 \x00 \x00\n\x00".as_slice(),
+            ),
+            (
+                "utf16be.txt",
+                "utf-16be",
+                b"\xfe\xff\x00B\x00a\x00d\x00 \x00 \x00\n".as_slice(),
+            ),
+        ] {
+            let temp = TempDir::new(name);
+            write(
+                temp.path().join(".editorconfig"),
+                format!(
+                    "root = true\n\n[*]\ncharset = {charset}\ntrim_trailing_whitespace = true\n"
+                )
+                .as_bytes(),
+            );
+            let target = temp.path().join(name);
+            write(&target, contents);
+
+            let errors = check_file(&target, None).unwrap_err();
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| matches!(error, CheckError::TrailingWhitespace { line: 1 })),
+                "expected {name} to reach the text checker, got {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn nul_bytes_without_a_bom_are_skipped_as_binary() {
+        let temp = TempDir::new("binary");
+        write(
+            temp.path().join(".editorconfig"),
+            b"root = true\n\n[*]\ntrim_trailing_whitespace = true\n",
+        );
+        let target = temp.path().join("binary.dat");
+        write(&target, b"would have trailing whitespace  \0\n");
+
+        assert_eq!(check_file(&target, None), Err(vec![CheckError::Skipped]));
+    }
+
+    #[test]
+    fn absent_properties_do_not_enable_content_checks() {
+        let temp = TempDir::new("unset-properties");
+        write(
+            temp.path().join(".editorconfig"),
+            b"root = true\n\n[*]\nmax_line_length = off\n",
+        );
+        let target = temp.path().join("unchecked.txt");
+        write(&target, b"\tcontent with trailing whitespace  \r\n");
+
+        assert_eq!(check_file(&target, None), Ok(()));
+    }
+
+    #[test]
+    fn files_larger_than_the_limit_are_skipped_before_content_checks() {
+        let temp = TempDir::new("max-size");
+        write(
+            temp.path().join(".editorconfig"),
+            b"root = true\n\n[*]\ntrim_trailing_whitespace = true\n",
+        );
+        let target = temp.path().join("large.txt");
+        write(&target, b"trailing whitespace  \n");
+
+        assert_eq!(check_file(&target, Some(1)), Err(vec![CheckError::Skipped]));
     }
 }
