@@ -1,5 +1,5 @@
 [package]
-name = "eddy"
+name = "edcfg-lint"
 version = "0.1.0"
 edition = "2024"
 

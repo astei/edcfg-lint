@@ -1,4 +1,4 @@
-# eddy
+# edcfg-lint
 
 A fast `editorconfig` linter written in Rust. It is many times faster than [`editorconfig-checker`](https://github.com/editorconfig-checker/editorconfig-checker).
 
@@ -13,7 +13,7 @@ There honestly isn't a lot of magic: we use standard Rust crates.
 * `memchr` is used for some fast (substring and character) searches.
 * `encoding_rs` is used to handle charset detection and decoding.
 
-Eddy primarily comprises of:
+edcfg-lint primarily comprises of:
 
 * The harness (`src/main.rs`)
 * The checker (`src/file.rs`)
@@ -54,18 +54,18 @@ trim_trailing_whitespace = false
 
 </details>
 
-`editorconfig-checker` 3.6.0 (without `-disable-indent-size`, as eddy doesn't do this check at all):
+`editorconfig-checker` 3.6.0 (without `-disable-indent-size`, as edcfg-lint doesn't do this check at all):
 
 ```
   Time (mean ± σ):      3.668 s ±  0.021 s    [User: 18.099 s, System: 2.113 s]
   Range (min … max):    3.655 s …  3.692 s    3 runs
 ```
 
-`eddy`:
+`edcfg-lint`:
 
 ```
   Time (mean ± σ):     432.1 ms ± 133.7 ms    [User: 1394.8 ms, System: 2495.2 ms]
   Range (min … max):   322.0 ms … 586.6 ms    5 runs
 ```
 
-`eddy` is ~8x faster.
+`edcfg-lint` is ~8x faster.

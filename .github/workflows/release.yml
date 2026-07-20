@@ -126,17 +126,17 @@ jobs:
               run: |
                   ${{ env.CARGO }} build --verbose --profile release-lto ${{ env.TARGET_FLAGS }}
                   if [[ "${{ matrix.os }}" == windows-* ]]; then
-                    bin="target/${{ matrix.target }}/release-lto/eddy.exe"
-                    final_bin="eddy.exe"
+                    bin="target/${{ matrix.target }}/release-lto/edcfg-lint.exe"
+                    final_bin="edcfg-lint.exe"
                   else
-                    bin="target/${{ matrix.target }}/release-lto/eddy"
-                    final_bin="eddy"
+                    bin="target/${{ matrix.target }}/release-lto/edcfg-lint"
+                    final_bin="edcfg-lint"
                   fi
 
                   cp $bin $final_bin
                   echo "BIN=$final_bin" >> $GITHUB_ENV
                   version="${{ needs.create-release.outputs.version }}"
-                  echo "ARCHIVE=eddy-$version-${{ matrix.target }}" >> $GITHUB_ENV
+                  echo "ARCHIVE=edcfg-lint-$version-${{ matrix.target }}" >> $GITHUB_ENV
 
             - name: Build archive (Windows)
               shell: bash

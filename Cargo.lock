@@ -185,7 +185,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b31a881d38439026e3d5dd938ab20328d36e23caca8fd5981c42e4b677f5842"
 
 [[package]]
-name = "eddy"
+name = "edcfg-lint"
 version = "0.1.0"
 dependencies = [
  "clap",

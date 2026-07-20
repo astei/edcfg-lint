@@ -9,12 +9,12 @@ use ec4rs::{
 use memchr::memchr_iter;
 use memchr::memmem;
 
-const EDDY_PREFIX: &str = "eddy-";
-const EDDY_SKIP_FILE: &str = "eddy-disable-file";
-const EDDY_SKIP_NEXT_LINE: &str = "eddy-disable-next-line";
-const EDDY_SKIP_THIS_LINE: &str = "eddy-disable-line";
-const EDDY_SKIP_DISABLE_BLOCK: &str = "eddy-off";
-const EDDY_SKIP_ENABLE_BLOCK: &str = "eddy-on";
+const EDCFG_LINT_PREFIX: &str = "edcfg-lint-";
+const EDCFG_LINT_SKIP_FILE: &str = "edcfg-lint-disable-file";
+const EDCFG_LINT_SKIP_NEXT_LINE: &str = "edcfg-lint-disable-next-line";
+const EDCFG_LINT_SKIP_THIS_LINE: &str = "edcfg-lint-disable-line";
+const EDCFG_LINT_SKIP_DISABLE_BLOCK: &str = "edcfg-lint-off";
+const EDCFG_LINT_SKIP_ENABLE_BLOCK: &str = "edcfg-lint-on";
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 enum DeferredSkipState {
@@ -216,7 +216,7 @@ pub fn check_file_against_editorconfig(contents: &[u8], properties: &Properties)
     }
 
     if let Some(first_line) = decoded_string.lines().next()
-        && first_line.contains(EDDY_SKIP_FILE)
+        && first_line.contains(EDCFG_LINT_SKIP_FILE)
     {
         return vec![];
     }
@@ -228,16 +228,16 @@ pub fn check_file_against_editorconfig(contents: &[u8], properties: &Properties)
 
     // Set up logic for skipping code as needed
     let mut deferred_skip_state: Option<DeferredSkipState> = None;
-    let eddy_prefix_finder = memmem::Finder::new(EDDY_PREFIX.as_bytes());
+    let edcfg_lint_prefix_finder = memmem::Finder::new(EDCFG_LINT_PREFIX.as_bytes());
 
     for (i, line) in decoded_string.lines().enumerate() {
         if deferred_skip_state.is_none() {
-            if eddy_prefix_finder.find(line.as_bytes()).is_some() {
-                if line.contains(EDDY_SKIP_THIS_LINE) {
+            if edcfg_lint_prefix_finder.find(line.as_bytes()).is_some() {
+                if line.contains(EDCFG_LINT_SKIP_THIS_LINE) {
                     continue;
-                } else if line.contains(EDDY_SKIP_NEXT_LINE) {
+                } else if line.contains(EDCFG_LINT_SKIP_NEXT_LINE) {
                     deferred_skip_state = Some(DeferredSkipState::NextLine);
-                } else if line.contains(EDDY_SKIP_DISABLE_BLOCK) {
+                } else if line.contains(EDCFG_LINT_SKIP_DISABLE_BLOCK) {
                     deferred_skip_state = Some(DeferredSkipState::DisabledBlock);
                 }
             }
@@ -248,7 +248,7 @@ pub fn check_file_against_editorconfig(contents: &[u8], properties: &Properties)
                     continue;
                 }
                 DeferredSkipState::DisabledBlock => {
-                    if line.contains(EDDY_SKIP_ENABLE_BLOCK) {
+                    if line.contains(EDCFG_LINT_SKIP_ENABLE_BLOCK) {
                         deferred_skip_state = None;
                     }
                     continue;
@@ -694,12 +694,12 @@ mod test {
         properties.insert(IndentStyle::Spaces);
         properties.insert(TrimTrailingWs::Value(true));
 
-        // File with eddy-disable-file on first line should skip all checks
-        let content = b"// eddy-disable-file\n\tindent with tabs  \n";
+        // File with edcfg-lint-disable-file on first line should skip all checks
+        let content = b"// edcfg-lint-disable-file\n\tindent with tabs  \n";
         let errors = check_file_against_editorconfig(content, &properties);
         assert!(
             errors.is_empty(),
-            "eddy-disable-file should skip all checks"
+            "edcfg-lint-disable-file should skip all checks"
         );
 
         // Same content without the directive should produce errors
@@ -707,7 +707,7 @@ mod test {
         let errors = check_file_against_editorconfig(content_no_skip, &properties);
         assert!(
             !errors.is_empty(),
-            "Without eddy-disable-file, errors should be reported"
+            "Without edcfg-lint-disable-file, errors should be reported"
         );
     }
 
@@ -717,12 +717,12 @@ mod test {
         properties.insert(IndentStyle::Spaces);
         properties.insert(TrimTrailingWs::Value(true));
 
-        // eddy-disable-file on second line should NOT skip the file
-        let content = b"// some comment\n// eddy-disable-file\n\tindent with tabs  \n";
+        // edcfg-lint-disable-file on second line should NOT skip the file
+        let content = b"// some comment\n// edcfg-lint-disable-file\n\tindent with tabs  \n";
         let errors = check_file_against_editorconfig(content, &properties);
         assert!(
             !errors.is_empty(),
-            "eddy-disable-file on non-first line should not skip file"
+            "edcfg-lint-disable-file on non-first line should not skip file"
         );
     }
 
@@ -732,12 +732,12 @@ mod test {
         properties.insert(IndentStyle::Spaces);
         properties.insert(TrimTrailingWs::Value(true));
 
-        // Line with eddy-disable-line should be skipped
-        let content = b"\tbad indent // eddy-disable-line\ngood line\n";
+        // Line with edcfg-lint-disable-line should be skipped
+        let content = b"\tbad indent // edcfg-lint-disable-line\ngood line\n";
         let errors = check_file_against_editorconfig(content, &properties);
         assert!(
             errors.is_empty(),
-            "eddy-disable-line should skip checking that line"
+            "edcfg-lint-disable-line should skip checking that line"
         );
 
         // Same content without directive should produce error
@@ -747,7 +747,7 @@ mod test {
             errors
                 .iter()
                 .any(|e| matches!(e, CheckError::WrongIndentStyle { line: 1, .. })),
-            "Without eddy-disable-line, indent error should be reported"
+            "Without edcfg-lint-disable-line, indent error should be reported"
         );
     }
 
@@ -757,12 +757,12 @@ mod test {
         properties.insert(IndentStyle::Spaces);
         properties.insert(TrimTrailingWs::Value(true));
 
-        // Line after eddy-disable-next-line should be skipped
-        let content = b"// eddy-disable-next-line\n\tbad indent  \ngood line\n";
+        // Line after edcfg-lint-disable-next-line should be skipped
+        let content = b"// edcfg-lint-disable-next-line\n\tbad indent  \ngood line\n";
         let errors = check_file_against_editorconfig(content, &properties);
         assert!(
             errors.is_empty(),
-            "eddy-disable-next-line should skip checking the following line"
+            "edcfg-lint-disable-next-line should skip checking the following line"
         );
 
         // Same content without directive should produce errors
@@ -770,7 +770,7 @@ mod test {
         let errors = check_file_against_editorconfig(content_no_skip, &properties);
         assert!(
             !errors.is_empty(),
-            "Without eddy-disable-next-line, errors should be reported"
+            "Without edcfg-lint-disable-next-line, errors should be reported"
         );
     }
 
@@ -780,14 +780,14 @@ mod test {
         properties.insert(IndentStyle::Spaces);
         properties.insert(TrimTrailingWs::Value(true));
 
-        // eddy-disable-next-line should only skip the immediately following line
-        let content = b"// eddy-disable-next-line\n\tskipped line\n\tnot skipped\n";
+        // edcfg-lint-disable-next-line should only skip the immediately following line
+        let content = b"// edcfg-lint-disable-next-line\n\tskipped line\n\tnot skipped\n";
         let errors = check_file_against_editorconfig(content, &properties);
         assert!(
             errors
                 .iter()
                 .any(|e| matches!(e, CheckError::WrongIndentStyle { line: 3, .. })),
-            "eddy-disable-next-line should only skip one line"
+            "edcfg-lint-disable-next-line should only skip one line"
         );
     }
 
@@ -797,13 +797,13 @@ mod test {
         properties.insert(IndentStyle::Spaces);
         properties.insert(TrimTrailingWs::Value(true));
 
-        // Lines between eddy-off and eddy-on should be skipped
+        // Lines between edcfg-lint-off and edcfg-lint-on should be skipped
         let content =
-            b"good line\n// eddy-off\n\tbad line 1  \n\tbad line 2  \n// eddy-on\ngood line\n";
+            b"good line\n// edcfg-lint-off\n\tbad line 1  \n\tbad line 2  \n// edcfg-lint-on\ngood line\n";
         let errors = check_file_against_editorconfig(content, &properties);
         assert!(
             errors.is_empty(),
-            "Lines between eddy-off and eddy-on should be skipped"
+            "Lines between edcfg-lint-off and edcfg-lint-on should be skipped"
         );
 
         // Same content without directives should produce errors
@@ -812,7 +812,7 @@ mod test {
         let errors = check_file_against_editorconfig(content_no_skip, &properties);
         assert!(
             !errors.is_empty(),
-            "Without eddy-off/eddy-on, errors should be reported"
+            "Without edcfg-lint-off/edcfg-lint-on, errors should be reported"
         );
     }
 
@@ -822,12 +822,12 @@ mod test {
         properties.insert(IndentStyle::Spaces);
         properties.insert(TrimTrailingWs::Value(true));
 
-        // eddy-off without eddy-on should skip all remaining lines
-        let content = b"good line\n// eddy-off\n\tbad line 1  \n\tbad line 2  \n";
+        // edcfg-lint-off without edcfg-lint-on should skip all remaining lines
+        let content = b"good line\n// edcfg-lint-off\n\tbad line 1  \n\tbad line 2  \n";
         let errors = check_file_against_editorconfig(content, &properties);
         assert!(
             errors.is_empty(),
-            "eddy-off without eddy-on should skip all remaining lines"
+            "edcfg-lint-off without edcfg-lint-on should skip all remaining lines"
         );
     }
 
@@ -837,19 +837,19 @@ mod test {
         properties.insert(IndentStyle::Spaces);
         properties.insert(TrimTrailingWs::Value(true));
 
-        // eddy-disable-line in different comment styles
-        let content_c_style = b"\tbad indent /* eddy-disable-line */\n";
+        // edcfg-lint-disable-line in different comment styles
+        let content_c_style = b"\tbad indent /* edcfg-lint-disable-line */\n";
         let errors = check_file_against_editorconfig(content_c_style, &properties);
         assert!(
             errors.is_empty(),
-            "eddy-disable-line should work in C-style comments"
+            "edcfg-lint-disable-line should work in C-style comments"
         );
 
-        let content_hash = b"\tbad indent # eddy-disable-line\n";
+        let content_hash = b"\tbad indent # edcfg-lint-disable-line\n";
         let errors = check_file_against_editorconfig(content_hash, &properties);
         assert!(
             errors.is_empty(),
-            "eddy-disable-line should work with hash comments"
+            "edcfg-lint-disable-line should work with hash comments"
         );
     }
 
@@ -859,13 +859,13 @@ mod test {
         properties.insert(IndentStyle::Spaces);
         properties.insert(TrimTrailingWs::Value(true));
 
-        // Multiple eddy-off/eddy-on blocks
+        // Multiple edcfg-lint-off/edcfg-lint-on blocks
         let content =
-            b"good\n// eddy-off\n\tbad\n// eddy-on\ngood\n// eddy-off\n\tbad\n// eddy-on\ngood\n";
+            b"good\n// edcfg-lint-off\n\tbad\n// edcfg-lint-on\ngood\n// edcfg-lint-off\n\tbad\n// edcfg-lint-on\ngood\n";
         let errors = check_file_against_editorconfig(content, &properties);
         assert!(
             errors.is_empty(),
-            "Multiple eddy-off/eddy-on blocks should all be respected"
+            "Multiple edcfg-lint-off/edcfg-lint-on blocks should all be respected"
         );
     }
 }
