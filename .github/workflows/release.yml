@@ -230,7 +230,7 @@ jobs:
                   name: wheels-sdist
                   path: dist
 
-    Publish to PyPI
+    # Publish to PyPI
     publish-pypi:
         name: publish-pypi
         runs-on: ubuntu-latest
