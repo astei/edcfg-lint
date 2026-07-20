@@ -38,9 +38,13 @@ static GLOBAL: Jemalloc = Jemalloc;
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    /// Don't emit specific errors.
+    /// Don't emit specific errors, instead emit the total number of errors.
     #[arg(short, long)]
-    concise: bool,
+    count: bool,
+
+    /// How many threads to use. By default, uses all cores.
+    #[arg(short, long, default_value = "0")]
+    jobs: usize,
 
     /// Files to exclude.
     #[arg(long)]
@@ -85,6 +89,10 @@ fn main() {
     let mut walk_builder = WalkBuilder::new(&first_path);
     for path in args.paths.iter().skip(1) {
         walk_builder.add(path);
+    }
+
+    if args.jobs > 0 {
+        walk_builder.threads(args.jobs);
     }
 
     let max_file_size = match args.max_file_size {
@@ -135,7 +143,7 @@ fn main() {
     let mut stdout = StandardStream::stdout(ColorChoice::Auto);
     let _ = stdout.set_color(ColorSpec::new().set_fg(Some(Color::Red)));
 
-    if !args.concise {
+    if !args.count {
         files_with_errors
             .sort_by(|(file_path_a, _), (file_path_b, _)| file_path_a.cmp(file_path_b));
         for (file_path, errors) in files_with_errors.iter() {
