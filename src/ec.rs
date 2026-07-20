@@ -75,6 +75,7 @@ impl PropertiesSource for &EagerlyParsedEditorConfig {
 /// but will join relative paths onto the current working directory.
 ///
 /// EditorConfig files are assumed to be named `.editorconfig`.
+#[cfg_attr(feature = "bench-uncached-resolver", allow(dead_code))]
 pub fn properties_of_cached(path: impl AsRef<Path>) -> Result<Properties, Error> {
     // I have benchmarked this, and hashing just doesn't play a significant role in performance.
     // So we'll use the default SipHash-1-3.
@@ -138,6 +139,49 @@ pub fn properties_of_cached(path: impl AsRef<Path>) -> Result<Properties, Error>
                 if is_root {
                     break;
                 }
+            }
+        }
+
+        current = dir;
+    }
+
+    for config in to_apply.iter().rev() {
+        config.apply_to(&mut properties, abs_path.as_ref())?;
+    }
+
+    Ok(properties)
+}
+
+/// Retrieves properties without caching any positive or negative config-file lookups.
+///
+/// This exists for corrected-behavior benchmarking. It deliberately shares the cached
+/// resolver's path handling, config-parent-relative section application, precedence, and
+/// `root` behavior; only the cache is absent.
+#[cfg(feature = "bench-uncached-resolver")]
+pub fn properties_of_uncached(path: impl AsRef<Path>) -> Result<Properties, Error> {
+    let mut abs_path = Cow::from(path.as_ref());
+    if abs_path.is_relative() {
+        abs_path = std::env::current_dir()
+            .map_err(Error::InvalidCwd)?
+            .join(&path)
+            .into();
+    }
+
+    let mut current = abs_path.as_ref();
+    let mut properties = Properties::new();
+    let mut to_apply = vec![];
+
+    while let Some(dir) = current.parent() {
+        let config_path = dir.join(EDITORCONFIG_FILE_NAME);
+
+        if let Ok(mut opened_config) = ConfigFile::open(&config_path) {
+            let parsed = Arc::new(EagerlyParsedEditorConfig::from_config_file(
+                &mut opened_config,
+            )?);
+            let is_root = parsed.is_root;
+            to_apply.push(parsed);
+            if is_root {
+                break;
             }
         }
 

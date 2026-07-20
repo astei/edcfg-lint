@@ -270,7 +270,9 @@ pub fn check_file_against_editorconfig(contents: &[u8], properties: &Properties)
 
     check_editorconfig_line_endings(&decoded_string, properties, true, &mut errors);
 
-    // Extract properties once for all lines to amortize hashmap lookups
+    // Extract properties once for all lines to amortize hashmap lookups. The benchmark-only
+    // variant below reconstructs the same values per checked line without changing semantics.
+    #[cfg(not(feature = "bench-per-line-properties"))]
     let line_config = LineCheckConfig::from_properties(properties);
 
     // Set up logic for skipping code as needed
@@ -302,6 +304,9 @@ pub fn check_file_against_editorconfig(contents: &[u8], properties: &Properties)
                 }
             }
         }
+
+        #[cfg(feature = "bench-per-line-properties")]
+        let line_config = LineCheckConfig::from_properties(properties);
 
         check_editorconfig_properties_for_line(i + 1, line, &line_config, &mut errors);
     }

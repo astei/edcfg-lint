@@ -3,11 +3,14 @@ mod ec;
 mod error;
 mod file;
 
-use ignore::{WalkBuilder, WalkState};
+use ignore::WalkBuilder;
+#[cfg(not(feature = "bench-serial-walk"))]
+use ignore::WalkState;
 use memchr::memchr;
 use regex::RegexSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(not(feature = "bench-serial-walk"))]
 use std::sync::mpsc::channel;
 
 use clap::error::ErrorKind;
@@ -75,7 +78,6 @@ fn main() {
     let mut total_files = 0;
 
     // Walk files, respecting .gitignore
-    let (sender, receiver) = channel();
     let excludes = config::get_default_excludes();
 
     let user_provided_excludes = match RegexSet::new(args.exclude) {
@@ -106,13 +108,37 @@ fn main() {
         size => usize::try_from(size.0).ok(),
     };
 
-    walk_builder
-        .filter_entry(move |entry| {
-            let path_str = entry.path().to_string_lossy();
-            !excludes.is_match(&path_str) && !user_provided_excludes.is_match(&path_str)
-        })
-        .build_parallel()
-        .run(|| {
+    walk_builder.filter_entry(move |entry| {
+        let path_str = entry.path().to_string_lossy();
+        !excludes.is_match(&path_str) && !user_provided_excludes.is_match(&path_str)
+    });
+
+    let mut files_with_errors = vec![];
+
+    #[cfg(feature = "bench-serial-walk")]
+    for result in walk_builder.build() {
+        let entry = match result {
+            Ok(entry) => entry,
+            Err(e) => {
+                eprintln!("Error walking directory: {}", e);
+                continue;
+            }
+        };
+
+        if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+            continue;
+        }
+
+        let file_path = entry.path().to_path_buf();
+        let result = check_file_with_optional_probe(&file_path, max_file_size);
+        record_result(file_path, result, &mut total_files, &mut files_with_errors);
+    }
+
+    #[cfg(not(feature = "bench-serial-walk"))]
+    {
+        let (sender, receiver) = channel();
+
+        walk_builder.build_parallel().run(|| {
             let my_sender = sender.clone();
             Box::new(move |result| {
                 let entry = match result {
@@ -128,26 +154,16 @@ fn main() {
                 }
 
                 let file_path = entry.path().to_path_buf();
-
-                let result = check_file(&file_path, max_file_size);
+                let result = check_file_with_optional_probe(&file_path, max_file_size);
                 let _ = my_sender.send((file_path, result));
                 WalkState::Continue
             })
         });
 
-    drop(sender);
+        drop(sender);
 
-    let mut files_with_errors = vec![];
-
-    for (file_path, result) in receiver {
-        match result {
-            Ok(()) => total_files += 1,
-            Err(errors) => {
-                if errors.as_slice() != [error::CheckError::Skipped] {
-                    files_with_errors.push((file_path, errors));
-                    total_files += 1;
-                }
-            }
+        for (file_path, result) in receiver {
+            record_result(file_path, result, &mut total_files, &mut files_with_errors);
         }
     }
 
@@ -181,6 +197,33 @@ fn main() {
     }
 }
 
+fn record_result(
+    file_path: PathBuf,
+    result: Result<(), Vec<error::CheckError>>,
+    total_files: &mut usize,
+    files_with_errors: &mut Vec<(PathBuf, Vec<error::CheckError>)>,
+) {
+    match result {
+        Ok(()) => *total_files += 1,
+        Err(errors) => {
+            if errors.as_slice() != [error::CheckError::Skipped] {
+                files_with_errors.push((file_path, errors));
+                *total_files += 1;
+            }
+        }
+    }
+}
+
+fn check_file_with_optional_probe(
+    path: &Path,
+    max_file_size: Option<usize>,
+) -> Result<(), Vec<error::CheckError>> {
+    #[cfg(feature = "bench-legacy-mime-probe")]
+    let _ = std::hint::black_box(infer::get_from_path(path));
+
+    check_file(path, max_file_size)
+}
+
 fn check_file(path: &Path, max_file_size: Option<usize>) -> Result<(), Vec<error::CheckError>> {
     let mut file = match fs::File::open(path) {
         Ok(file) => file,
@@ -207,7 +250,11 @@ fn check_file(path: &Path, max_file_size: Option<usize>) -> Result<(), Vec<error
         return Err(vec![error::CheckError::Skipped]);
     }
 
+    #[cfg(not(feature = "bench-uncached-resolver"))]
     let properties = ec::properties_of_cached(path).map_err(|_| vec![])?;
+
+    #[cfg(feature = "bench-uncached-resolver")]
+    let properties = ec::properties_of_uncached(path).map_err(|_| vec![])?;
 
     let errors = file::check_file_against_editorconfig(&content, &properties);
 

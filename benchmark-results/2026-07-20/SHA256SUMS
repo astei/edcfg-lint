@@ -1,0 +1,15 @@
+c9832186d02c2a4f3cc6851f83cd5d3822f1eb6b8dd76473e6f039d467602c20  ./corrected-optimization/linux/home-assistant.json
+939d667fee62f15c391ce0120c5e0343c0eb9c39970afef4613abea3c587efa4  ./corrected-optimization/linux/roslyn.json
+0b389e1a68df72fad6065a8ae59ae566f3f6755af0f5deac35a738fdb588cff8  ./corrected-optimization/macos/home-assistant.json
+bdbf921bce8619d13394775423a5ba99cf9c5d1886be2d58a4b1c99327ff5a67  ./corrected-optimization/macos/roslyn.json
+12b03c44356bae53d989939578143d60f2dcc8831e42e37598e69cafcf87fd9e  ./corrected-optimization/macos/untouched-home-assistant-rerun.json
+ef129b2a878342939ba23515617541150700a1a1f2b1ada6c29601ce2a180a31  ./corrected-optimization/macos/untouched-home-assistant.json
+2548cb81a80fdfe57f65bb8d9fa0d3fd099a329484b39de8eb2c310625805b50  ./corrected-optimization/macos/untouched-roslyn.json
+52eec6e314a18beb4c2bd21e0a736a5243f404b9702490b7b6e5f52b630ec3ed  ./roslyn-reference/linux/edcfg-default.json
+6140a4dbf74be7125f9bbde20a161f4ecef9829adf4e0b053973b58956f68eca  ./roslyn-reference/linux/edcfg-full.json
+b57581181f29d20375a4e13bd4aa13d6afac2f4082b42bb3de58a413d1ffd2b6  ./roslyn-reference/linux/editorconfig-checker.json
+33fbb3898ca4939bf4356f3d07952c5468240f4e482b59d33239980926a744de  ./roslyn-reference/linux/thread-scaling.json
+3d182e003dc30ad61174a11d7bfac7eaa9f29c6349748e1f3fa5279d4d8732d2  ./roslyn-reference/macos/edcfg-default.json
+7d61ad16ab54b726c182ac04f0eeaffdaf99b086d9fc1095afb3d2c6ac260e5c  ./roslyn-reference/macos/edcfg-full.json
+ab61e83aff4488e269dcf70f763cb72c9bf114da5640c3f814c6a17dde6cfbc6  ./roslyn-reference/macos/editorconfig-checker.json
+5f1e81202b30e55922435fa8a73b8f9d76c6a0e23b29add88b1a5d1b81d1600f  ./roslyn-reference/macos/thread-scaling.json
