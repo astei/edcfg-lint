@@ -18,15 +18,8 @@ use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 use human_units::Size;
 
-// musl is a minimal C standard library implementation. As such, it lacks the depth and
-// complexity of other system C libraries. Unfortunately, one of the most important things
-// it lacks is a fast memory allocator. When linting a large codebase, the default allocator
-// has particularly poor performance. Using mimalloc and gets musl's performance *much* more
-// competitive with that of glibc.
-#[cfg(target_env = "musl")]
 use mimalloc::MiMalloc;
 
-#[cfg(target_env = "musl")]
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
