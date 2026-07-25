@@ -7,8 +7,8 @@ use ec4rs::{
         TrimTrailingWs,
     },
 };
-use memchr::memchr_iter;
 use memchr::memmem;
+use memchr::{memchr, memchr_iter, memchr2};
 
 const EDCFG_LINT_PREFIX: &str = "edcfg-lint-";
 const EDCFG_LINT_SKIP_FILE: &str = "edcfg-lint-disable-file";
@@ -184,14 +184,28 @@ fn check_editorconfig_line_endings(
 
     let content_bytes = contents.as_bytes();
 
-    let crlfs = memmem::find_iter(content_bytes, b"\r\n").count();
-    let crs = memchr_iter(b'\r', content_bytes).count();
-    let lfs = memchr_iter(b'\n', content_bytes).count();
-
     let line_endings_match = match line_ending_mode {
-        EndOfLine::Cr => lfs == 0,
-        EndOfLine::Lf => crs == 0,
-        EndOfLine::CrLf => crs == crlfs && lfs == crlfs,
+        EndOfLine::Cr => memchr(b'\n', content_bytes).is_none(),
+        EndOfLine::Lf => memchr(b'\r', content_bytes).is_none(),
+        EndOfLine::CrLf => {
+            let mut valid = true;
+            let mut start_idx = 0;
+            while let Some(offset) = memchr2(b'\r', b'\n', &content_bytes[start_idx..]) {
+                let pos = start_idx + offset;
+                match content_bytes[pos] {
+                    b'\r' if content_bytes.get(pos + 1) == Some(&b'\n') => {
+                        start_idx = pos + 2;
+                    }
+                    b'\r' | b'\n' => {
+                        valid = false;
+                        break;
+                    }
+                    _ => unreachable!(),
+                }
+            }
+
+            valid
+        }
     };
 
     if !line_endings_match {
